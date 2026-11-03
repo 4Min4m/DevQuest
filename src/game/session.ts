@@ -27,7 +27,7 @@ export interface SessionStats {
  */
 export class MissionSession {
   readonly shell: Shell;
-  status: 'active' | 'passed' = 'active';
+  status: 'active' | 'passed' | 'failed' = 'active';
   hintsRevealed = 0;
   failedChecks = 0;
   commands = 0;
@@ -50,7 +50,7 @@ export class MissionSession {
     const events: SessionEvent[] = [];
     if (!line.trim()) return { result, events };
     this.outputs.push(result.output.filter((c) => c.stream === 'stdout').map((c) => c.text).join(''));
-    if (this.status === 'passed') return { result, events };
+    if (this.status !== 'active') return { result, events };
     this.commands++;
 
     const broken = brokenGuards(this.mission.validator, this.ctx());
@@ -77,10 +77,16 @@ export class MissionSession {
     const base = validate(this.mission.validator, this.ctx());
     const broken = brokenGuards(this.mission.validator, this.ctx());
     const v: ValidationResult = { passed: base.passed && broken.length === 0, results: [...base.results, ...broken] };
+    if (this.status !== 'active') return v; // finished attempts don't change any more
     this.lastValidation = v;
     if (v.passed) this.status = 'passed';
     else this.failedChecks++;
     return v;
+  }
+
+  /** End the attempt without success (e.g. out of hearts). */
+  fail(): void {
+    if (this.status === 'active') this.status = 'failed';
   }
 
   get revealedHints(): Hint[] {

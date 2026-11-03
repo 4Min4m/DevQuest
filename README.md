@@ -9,6 +9,8 @@ browser terminal. No backend, no runtime network calls. See [CLAUDE.md](CLAUDE.m
   Linux commands, all unit-tested, wired to an xterm.js terminal page.
 - **Step 2 done:** mission engine, declarative validators, lesson pane and 8 Linux missions
   (Linux Basics, Files & Permissions, Processes, Text Processing).
+- **Step 3 done:** XP and levels, daily streak, 3 hearts per lesson, unlocking, skill tree
+  and profile screens, progress saved in localStorage with JSON export/import.
 
 ## Develop
 
@@ -29,10 +31,13 @@ src/sim/vfs/                in-memory filesystem (modes, owners, mtimes, errno-s
 src/sim/shell/              lexer/parser → AST, expansion ($VAR, ~, globs), executor
                             (pipes, > >> < 2> 2>&1 &>, && || ;), tab completion
 src/sim/commands/linux/     one module per command group, each with tests
-src/game/                   mission engine: initial-state builder, validators, MissionSession
+src/game/                   mission engine: initial-state builder, validators, MissionSession;
+                            progress.ts (XP, levels, streak, hearts, unlocking, skill tree),
+                            store.ts (Zustand store persisted to localStorage)
 src/content/lessons/*.yaml  lesson content (theory, missions, hints, checks, reference solutions)
 src/ui/terminal/            line editor (history, Ctrl keys, Tab) + xterm.js pane
 src/ui/lesson/              lesson list + mission pane
+src/ui/tree/, src/ui/profile/  skill tree and profile (export / import / reset) screens
 scripts/sim-cli.ts          run the simulator in a real terminal
 ```
 
@@ -43,6 +48,16 @@ ps kill whoami id env export unset df du curl help history clear true false`
 
 Run `<command> --help` to see which options the simulator supports. Real commands that
 aren't simulated yet (e.g. `sed`, `vim`, `sudo`) say so explicitly instead of failing silently.
+
+## Game rules
+
+- **XP** per mission = base XP − hint costs (never below 25 % of base) + 20 % for no hints
+  + 20 % for finishing within `par` commands. Replays only award the improvement over your best.
+- **Levels** need 100, 300, 600, 1000… total XP.
+- **Hearts:** each lesson has 3. A failed Check or a broken guard costs one; at zero the mission
+  fails and you retry with full hearts. Completing a lesson refills them.
+- **Streak:** complete at least one mission per calendar day.
+- **Unlocking:** a lesson opens when its prerequisites are complete; missions open in order.
 
 ## Writing missions
 
