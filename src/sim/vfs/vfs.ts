@@ -29,8 +29,15 @@ export function makeFile(
 }
 
 export function nodeSize(node: FsNode): number {
-  return node.type === 'dir' ? DIR_SIZE : new TextEncoder().encode(node.content).length;
+  if (node.type === 'dir') return DIR_SIZE;
+  return node.size ?? new TextEncoder().encode(node.content).length;
 }
+
+/**
+ * Optional space accounting: asked before a new inode is created or a file grows.
+ * Return false to make the operation fail with ENOSPC ("No space left on device").
+ */
+export type SpaceGuard = (path: string, need: { inodes: number; bytes: number }) => boolean;
 
 export function cloneNode<T extends FsNode>(node: T): T {
   return structuredClone(node);
@@ -46,7 +53,14 @@ export class Vfs {
     public readonly root: DirNode,
     public readonly user: Identity,
     private readonly now: () => number = Date.now,
+    private readonly space?: SpaceGuard,
   ) {}
+
+  private reserve(path: string, inodes: number, bytes: number): void {
+    if (this.space && (inodes > 0 || bytes > 0) && !this.space(path, { inodes, bytes })) {
+      throw new VfsError('ENOSPC', path);
+    }
+  }
 
   get isRoot(): boolean {
     return this.user.name === 'root';
@@ -128,11 +142,21 @@ export class Vfs {
     if (existing) {
       if (existing.type === 'dir') throw new VfsError('EISDIR', path);
       if (!this.can(existing, W)) throw new VfsError('EACCES', path);
-      existing.content = opts.append ? existing.content + content : content;
+      const added = new TextEncoder().encode(content).length;
+      const growth = opts.append ? added : added - nodeSize(existing);
+      this.reserve(path, 0, growth);
+      if (opts.append) {
+        if (existing.size !== undefined) existing.size += added;
+        existing.content += content;
+      } else {
+        delete existing.size;
+        existing.content = content;
+      }
       existing.mtime = this.now();
       return;
     }
     this.requireWritableDir(parent, path);
+    this.reserve(path, 1, new TextEncoder().encode(content).length);
     parent.children[name] = makeFile(
       content,
       this.user.name,
@@ -179,6 +203,7 @@ export class Vfs {
           continue;
         }
         this.requireWritableDir(parent, cur);
+        this.reserve(cur, 1, 0);
         parent.children[seg] = makeDir(this.user.name, this.user.groups[0], this.now(), 0o777 & ~UMASK);
         parent.mtime = this.now();
       }
@@ -188,6 +213,7 @@ export class Vfs {
     const name = basename(path);
     if (parent.children[name]) throw new VfsError('EEXIST', path);
     this.requireWritableDir(parent, path);
+    this.reserve(path, 1, 0);
     parent.children[name] = makeDir(this.user.name, this.user.groups[0], this.now(), 0o777 & ~UMASK);
     parent.mtime = this.now();
   }

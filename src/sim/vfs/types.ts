@@ -15,6 +15,11 @@ export interface NodeMeta {
 export interface FileNode extends NodeMeta {
   type: 'file';
   content: string;
+  /**
+   * Apparent size in bytes when it differs from the content (e.g. a 9 GB log whose
+   * content is just a sample). Cleared when the file is overwritten.
+   */
+  size?: number;
 }
 
 export interface DirNode extends NodeMeta {
@@ -32,7 +37,8 @@ export type VfsErrorCode =
   | 'EACCES'
   | 'EPERM'
   | 'ENOTEMPTY'
-  | 'EINVAL';
+  | 'EINVAL'
+  | 'ENOSPC';
 
 /** Human messages exactly as libc's strerror() prints them. */
 export const ERROR_MESSAGES: Record<VfsErrorCode, string> = {
@@ -44,6 +50,7 @@ export const ERROR_MESSAGES: Record<VfsErrorCode, string> = {
   EPERM: 'Operation not permitted',
   ENOTEMPTY: 'Directory not empty',
   EINVAL: 'Invalid argument',
+  ENOSPC: 'No space left on device',
 };
 
 export class VfsError extends Error {

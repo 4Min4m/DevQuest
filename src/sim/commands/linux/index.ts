@@ -18,6 +18,7 @@ import { mkdir } from './mkdir';
 import { mv } from './mv';
 import { ps } from './ps';
 import { rm } from './rm';
+import { sed, tee } from './sed';
 import { sort } from './sort';
 import { touch } from './touch';
 import { uniq } from './uniq';
@@ -26,6 +27,6 @@ import { wc } from './wc';
 
 export const linuxCommands: CommandDef[] = [
   ls, cd, pwd, cat, echo, touch, mkdir, rm, cp, mv, head, tail, grep, find, wc, sort, uniq,
-  chmod, chown, ps, kill, whoami, id, env, exportCmd, unset, df, du, curl,
+  sed, tee, chmod, chown, ps, kill, whoami, id, env, exportCmd, unset, df, du, curl,
   help, history, clear, trueCmd, falseCmd, sleep, exit, nano, vi, vim,
 ];

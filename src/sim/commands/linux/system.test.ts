@@ -102,7 +102,7 @@ describe('df / du', () => {
     const t = makeShell();
     expect(t.run('df').out).toBe(
       'Filesystem     1K-blocks    Used Available Use% Mounted on\n' +
-        '/dev/sda1       20511312 6123448  14387864  30% /\n' +
+        '/dev/sda1       20511312 6123516  14387796  30% /\n' +
         'tmpfs            1012848       0   1012848   0% /tmp\n',
     );
     expect(t.run('df -h /').out).toBe('Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1        20G  5.9G   14G  30% /\n');

@@ -339,7 +339,7 @@ describe('ports and networking', () => {
     t.setup('docker run -d --name web -p 8080:80 nginx');
     expect(t.run('curl -s localhost:8080').out).toContain('<title>Welcome to nginx!</title>');
     expect(t.run('curl -sI localhost:8080').out).toMatch(/^HTTP\/1\.1 200 OK\n[\s\S]*Server: nginx\/1\.27\.2/);
-    expect(t.run('curl -s -o /dev/null -w x localhost:8080').code).toBe(2); // unsupported curl flag is explicit
+    expect(t.run('curl -s --trace x localhost:8080').code).toBe(2); // unsupported curl flag is explicit
     expect(t.run('curl localhost:8081')).toMatchObject({ code: 7 });
     expect(t.run('curl -f localhost:8080/nope')).toMatchObject({ err: 'curl: (22) The requested URL returned error: 404\n', code: 22 });
   });

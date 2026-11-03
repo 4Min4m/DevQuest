@@ -15,9 +15,9 @@ describe('shell execution', () => {
 
   it('explains real-but-unsimulated commands', () => {
     const t = makeShell();
-    const r = t.run('sed -n 1p notes.txt');
+    const r = t.run("awk '{print $1}' notes.txt");
     expect(r.code).toBe(127);
-    expect(r.err).toMatch(/'sed' is a real command, but it is not available in this simulator/);
+    expect(r.err).toMatch(/'awk' is a real command, but it is not available in this simulator/);
   });
 
   it('handles paths as commands', () => {
@@ -173,7 +173,7 @@ describe('expansion', () => {
     expect(t.run('echo ?.txt [ab].log').out).toBe('c.txt a.log b.log\n');
     expect(t.run('echo .*.log').out).toBe('.hidden.log\n');
     expect(t.run('echo [!a]*').out).toBe('b.log c.txt\n');
-    expect(t.run('echo /etc/host*').out).toBe('/etc/hostname\n');
+    expect(t.run('echo /etc/host*').out).toBe('/etc/hostname /etc/hosts\n');
   });
 
   it('leaves unmatched or quoted globs literal', () => {

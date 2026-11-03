@@ -1,0 +1,330 @@
+id: performance
+title: Performance & disks
+branch: performance
+prerequisites: [network-tools]
+sources:
+  - 03-Linux/04-Performance-Debugging
+  - 03-Linux/02-Filesystem-and-Storage
+  - 09-Observability/06-Incident-Response
+theory: |
+  When a box is "slow", check the four resources — **CPU, memory, disk, network** — and for each
+  ask about **U**tilization, **S**aturation and **E**rrors (the **USE method**).
+
+  | Resource | First look | What "bad" looks like |
+  |---|---|---|
+  | CPU | `uptime`, `top`, `nproc` | load average well above the number of CPUs |
+  | Memory | `free -h`, `top -o %MEM` | low **available** (not "free"!) and swap in use |
+  | Disk space | `df -h`, `du -sh /var/*` | `Use%` near 100% → "No space left on device" |
+  | Inodes | `df -i` | `IUse%` 100% while `df -h` still shows free space |
+  | Open files | `ulimit -n`, `LimitNOFILE=` | "too many open files" |
+
+  - **Load average** (1, 5, 15 min) counts runnable + waiting tasks. On 4 CPUs a load of 4 is "busy",
+    8 means work is queuing.
+  - Linux uses spare RAM as **cache**, so "free" is always small. Look at **available**.
+  - Every file uses one **inode**. Millions of tiny files can exhaust inodes long before bytes run out.
+  - `ulimit` in your shell does **not** apply to systemd services — set `LimitNOFILE=` in the unit.
+missions:
+  - id: memory-hog
+    title: Who ate all the RAM?
+    type: guided
+    prompt: |
+      The server is crawling and swapping heavily.
+
+      **Find the process using the most memory and stop it with a normal `kill`.** It's a batch
+      job that can be re-run later. Leave the database running!
+    initialState:
+      perf:
+        load: [3.92, 3.4, 2.1]
+        memUsedKb: 3790000
+        memBuffCacheKb: 160000
+        swapUsedKb: 1480000
+        cpu: { us: 22.4, sy: 9.1, id: 30.2, wa: 38.3 }
+      processes:
+        - { pid: 880, user: www-data, command: "postgres: 16/main", cpu: 3.1, mem: 9.8, rss: 395000, vsz: 220000, stat: Ss }
+        - { pid: 4321, user: student, command: "java -Xmx6g -jar /opt/reports/reports.jar", cpu: 41.2, mem: 71.3, rss: 2872000, vsz: 7400000, stat: Sl, time: "52:13" }
+        - { pid: 4400, user: student, command: "node /srv/web/server.js", cpu: 2.0, mem: 3.1, rss: 125000, vsz: 900000, stat: Sl }
+    hints:
+      - text: "`free -h` confirms it: little *available* memory and lots of swap used."
+        cost: 5
+      - text: "`top -o %MEM` sorts by memory use. The top line is your culprit."
+        cost: 5
+      - text: The reports job has PID 4321 — `kill 4321`.
+        cost: 10
+    validator:
+      checks:
+        - type: processAbsent
+          match: reports.jar
+          message: The reports job should be stopped.
+        - type: anyOf
+          checks:
+            - { type: commandUsed, command: top }
+            - { type: commandUsed, command: ps }
+          message: Find the process with `top` or `ps` instead of guessing.
+      guards:
+        - type: processRunning
+          match: postgres
+          message: Don't stop the database!
+    xp: 40
+    par: 3
+    solution:
+      - top -o %MEM
+      - kill 4321
+    explain: |
+      `top -o %MEM` (or `ps aux --sort=-%mem` on a real box) puts the biggest consumer first.
+      High `wa` (I/O wait) plus swap usage is the classic signature of memory pressure: the kernel is
+      busy moving pages to and from disk.
+
+  - id: too-many-open-files
+    title: Too many open files
+    type: guided
+    prompt: |
+      `ingest.service` dies right after starting. A colleague tried `ulimit -n 65536` in their shell
+      and swears it didn't help.
+
+      **Find out why it dies and fix it so `ingest` stays up.** (It needs at least 4096 open files.)
+    initialState:
+      files:
+        /opt/ingest/ingest:
+          content: "\x7fELF (compiled program)\n"
+          mode: "755"
+        /etc/systemd/system/ingest.service: |
+          [Unit]
+          Description=Event ingest
+          After=network.target
+
+          [Service]
+          ExecStart=/opt/ingest/ingest --listen :8125
+          Restart=no
+
+          [Install]
+          WantedBy=multi-user.target
+      binaries:
+        /opt/ingest/ingest:
+          name: ingest
+          listen: 8125
+          minNofile: 4096
+          startLog: ["ingest accepting events on :{port}"]
+          http:
+            /: { body: "ingest ok\n" }
+      setup:
+        - sudo systemctl enable --now ingest
+    hints:
+      - text: "`journalctl -u ingest` shows the error. Which limit is it hitting?"
+        cost: 5
+      - text: "A shell's `ulimit` only affects programs started from that shell. systemd services get their limits from the unit: `LimitNOFILE=`."
+        cost: 5
+      - text: "Add `LimitNOFILE=65536` under `[Service]` (e.g. `sudo nano /etc/systemd/system/ingest.service`), then `sudo systemctl daemon-reload` and `sudo systemctl restart ingest`."
+        cost: 10
+    validator:
+      checks:
+        - type: fileContains
+          path: /etc/systemd/system/ingest.service
+          regex: "LimitNOFILE=(\\d{4,}|infinity)"
+          message: The unit should raise LimitNOFILE.
+        - type: serviceActive
+          unit: ingest
+    xp: 60
+    par: 5
+    solution:
+      - journalctl -u ingest -n 5
+      - sudo sed -i 's/^\[Service\]/&\nLimitNOFILE=65536/' /etc/systemd/system/ingest.service
+      - sudo systemctl daemon-reload
+      - sudo systemctl restart ingest
+    explain: |
+      The default soft limit is 1024 open files — network servers burn through that fast (every
+      connection is a file descriptor). Limits are per process and inherited from the parent; for
+      services the parent is systemd, so the fix belongs in the unit file.
+
+  - id: performance-check
+    title: "Knowledge check: reading the numbers"
+    type: quiz
+    prompt: Interpret real output like you would during an incident.
+    xp: 30
+    questions:
+      - kind: single
+        prompt: "`nproc` says 4 and `uptime` shows `load average: 7.90, 7.62, 6.10`. What's going on?"
+        options:
+          - The machine is idle
+          - About twice as much work is queued as the CPUs can run — sustained overload
+          - Exactly 7.9% CPU is used
+          - Only a short spike in the last minute
+        answer: 1
+        explain: Load is runnable + waiting tasks. ~8 on 4 CPUs means work is queuing, and the 15-minute value shows it isn't brief.
+      - kind: single
+        prompt: "`free -h` shows `free: 180Mi`, `buff/cache: 2.9Gi`, `available: 3.0Gi` on a 4 GiB box. Memory problem?"
+        options:
+          - Yes, only 180 MiB left — add RAM now
+          - No — the cache is reclaimable, and 3.0 GiB is available
+          - Yes, the cache is leaking
+          - Impossible to tell without a reboot
+        answer: 1
+      - kind: single
+        prompt: "Creating a file fails with `No space left on device`, but `df -h` shows the disk 40% used. Next command?"
+        options:
+          - df -i
+          - free -h
+          - ping 8.8.8.8
+          - ulimit -n
+        answer: 0
+        explain: Out of inodes — usually millions of tiny files (sessions, cache, mail queue).
+      - kind: multi
+        prompt: Which are safe first steps when `/` is 100% full on a production server?
+        options:
+          - Find the biggest directories with `du -sh /var/*`
+          - Delete or compress old/rotated logs you've confirmed are not needed
+          - "`rm -rf /var/lib/*` to free space fast"
+          - Check for huge files a runaway debug log is still writing
+        answers: [0, 1, 3]
+      - kind: text
+        prompt: Which unit-file setting raises a service's open-file limit? (just the key)
+        accept: [LimitNOFILE, "LimitNOFILE="]
+
+  - id: boss-disk-full
+    title: "Boss: disk full at 2 AM"
+    type: boss
+    prompt: |
+      🚨 **2:07 AM.** Customers can't upload files. `uploads.service` is failing and the alerts say
+      the root filesystem is full.
+
+      Free up space safely and get `uploads` running again. **Customer files in `/var/lib/uploads`
+      must not be touched**, and keep today's application log `/var/log/app/app.log`.
+    initialState:
+      files:
+        /opt/uploads/uploads:
+          content: "\x7fELF (compiled program)\n"
+          mode: "755"
+        /etc/systemd/system/uploads.service: |
+          [Unit]
+          Description=Customer uploads
+
+          [Service]
+          ExecStart=/opt/uploads/uploads
+          Restart=on-failure
+
+          [Install]
+          WantedBy=multi-user.target
+        /var/lib/uploads/invoice-2026-10.pdf: "%PDF-1.7 (customer invoice)\n"
+        /var/lib/uploads/contract-acme.pdf: "%PDF-1.7 (signed contract)\n"
+        /var/log/app/app.log: "2026-11-03T02:01:12Z INFO upload accepted id=88123\n2026-11-03T02:05:40Z ERROR write failed: no space left on device\n"
+        /var/log/app/debug.log:
+          content: "2026-10-12T00:00:00Z DEBUG request headers={...}\n(DEBUG logging left on since Oct 12)\n"
+          size: 19000000000
+        /var/log/app/app.log.1: "2026-11-02T23:59:59Z INFO rotated\n"
+      binaries:
+        /opt/uploads/uploads:
+          name: uploads
+          listen: 8070
+          writesTo: /var/lib/uploads
+          startLog: ["uploads ready on :{port}"]
+          http:
+            /health: { body: "{\"status\":\"ok\"}\n" }
+      setup:
+        - sudo systemctl enable --now uploads
+    hints: []
+    validator:
+      checks:
+        - type: diskUsageBelow
+          mount: /
+          percent: 90
+          message: The root filesystem should be below 90% full.
+        - type: serviceActive
+          unit: uploads
+        - type: httpResponds
+          url: http://localhost:8070/health
+          contains: ok
+      guards:
+        - type: fileExists
+          path: /var/lib/uploads/invoice-2026-10.pdf
+          message: Customer files in /var/lib/uploads must not be deleted!
+        - type: fileExists
+          path: /var/lib/uploads/contract-acme.pdf
+          message: Customer files in /var/lib/uploads must not be deleted!
+        - type: fileExists
+          path: /var/log/app/app.log
+          message: Keep today's /var/log/app/app.log — it's needed for the incident review.
+    xp: 150
+    par: 7
+    solution:
+      - df -h
+      - du -sh /var/log/app/*
+      - sudo rm /var/log/app/debug.log
+      - sudo systemctl restart uploads
+      - curl localhost:8070/health
+    explain: |
+      `df -h` says *which* filesystem is full; `du -sh` walks down to *what* is filling it. Here a
+      debug log left on for weeks grew to ~18 GB. On a real server also check `sudo lsof | grep deleted`:
+      a file that's deleted while a process still holds it open keeps using space until that process restarts.
+      Afterwards: turn debug logging off and make sure logrotate covers the directory.
+
+  - id: boss-inodes
+    title: "Boss: full disk that isn't full"
+    type: boss
+    prompt: |
+      🚨 Logins on the shop are failing. `sessiond.service` can't create session files:
+      "No space left on device". But `df -h` shows plenty of free space on `/var/spool`…
+
+      Find the real problem, clean up **only the stale session files** (`sess_*`) in
+      `/var/spool/sessions`, and get `sessiond` running again.
+    initialState:
+      files:
+        /opt/sessiond/sessiond:
+          content: "\x7fELF (compiled program)\n"
+          mode: "755"
+        /etc/systemd/system/sessiond.service: |
+          [Unit]
+          Description=Session store
+
+          [Service]
+          ExecStart=/opt/sessiond/sessiond
+          User=www-data
+          Restart=on-failure
+
+          [Install]
+          WantedBy=multi-user.target
+        /var/spool/sessions/README: "Session files. Expired sessions should be purged by cron (purge-sessions) - DISABLED during migration!\n"
+      bulkFiles:
+        - { dir: /var/spool/sessions, prefix: sess_, count: 2000, content: "uid|i:0;", owner: www-data }
+      disks:
+        - { mount: /var/spool, filesystem: /dev/sdb1, size: 1048576, used: 2048, inodes: 2048, inodesUsed: 60 }
+      binaries:
+        /opt/sessiond/sessiond:
+          name: sessiond
+          listen: 7070
+          writesTo: /var/spool/sessions
+          startLog: ["session store ready on :{port}"]
+          http:
+            /health: { body: "{\"status\":\"ok\"}\n" }
+      setup:
+        - sudo systemctl enable --now sessiond
+    hints: []
+    validator:
+      checks:
+        - type: inodeUsageBelow
+          mount: /var/spool
+          percent: 50
+          message: /var/spool should have plenty of free inodes again.
+        - type: serviceActive
+          unit: sessiond
+        - type: httpResponds
+          url: http://localhost:7070/health
+          contains: ok
+      guards:
+        - type: fileExists
+          path: /var/spool/sessions/README
+          message: Only delete the sess_* files — keep the README.
+        - type: fileExists
+          path: /var/spool/sessions
+          kind: dir
+          message: Keep the /var/spool/sessions directory itself.
+    xp: 150
+    par: 6
+    solution:
+      - df -i /var/spool
+      - sudo find /var/spool/sessions -name 'sess_*' -delete
+      - sudo systemctl restart sessiond
+      - curl localhost:7070/health
+    explain: |
+      `df -i` showed **IUse% 100%**: every file needs an inode, and this small filesystem ran out of
+      them with 2,000 tiny session files while barely using any bytes. `find ... -name 'sess_*' -delete`
+      removes exactly the matching files (and scales to millions, unlike `rm sess_*`, which hits
+      "Argument list too long"). The real fix: re-enable the purge job.

@@ -1,4 +1,5 @@
-import { isMissionDone, isMissionUnlocked } from '../../game/progress';
+import { useMemo } from 'react';
+import { isMissionDone, isMissionUnlocked, lessonsInTreeOrder } from '../../game/progress';
 import type { Lesson } from '../../game/types';
 import { useProgress } from '../state';
 
@@ -13,9 +14,10 @@ const TYPE_ICON = { guided: '◆', free: '◇', boss: '☠', quiz: '?' } as cons
 /** Sidebar listing every lesson and its missions, with completion and locks. */
 export function LessonList({ lessons, current, onSelect }: Props) {
   const progress = useProgress();
+  const ordered = useMemo(() => lessonsInTreeOrder(lessons), [lessons]);
   return (
     <nav className="lesson-list" aria-label="Lessons">
-      {lessons.map((lesson) => (
+      {ordered.map((lesson) => (
         <section key={lesson.id}>
           <h3>{lesson.title}</h3>
           <ol>

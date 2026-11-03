@@ -60,7 +60,7 @@ export interface ShellApi {
 
 /** The part of Shell other modules may drive. */
 export interface ShellLike {
-  run(line: string): RunResult;
+  run(line: string, stdin?: string): RunResult;
 }
 
 export interface CommandDef {

@@ -5,6 +5,7 @@ const BRANCHES = [
   'foundations', 'networking', 'storage-databases', 'system-design', 'sre',
   'linux-basics', 'files-permissions', 'processes', 'text-processing', 'docker-basics',
   'images-dockerfile', 'volumes-networks', 'compose', 'troubleshooting',
+  'systemd', 'network-tools', 'performance',
   'version-control', 'kubernetes', 'cicd', 'cloud-iac', 'observability', 'security',
 ];
 
@@ -87,6 +88,18 @@ function checkCheck(c: unknown, where: string, p: Problems): void {
       break;
     case 'httpResponds':
       needs('url');
+      break;
+    case 'serviceActive':
+    case 'serviceEnabled':
+      needs('unit');
+      if (c.type === 'serviceActive' && c.state !== undefined && !['active', 'inactive', 'failed'].includes(String(c.state))) {
+        p.add(where, `serviceActive state must be active, inactive or failed`);
+      }
+      break;
+    case 'diskUsageBelow':
+    case 'inodeUsageBelow':
+      needs('mount');
+      if (typeof c.percent !== 'number' || c.percent <= 0 || c.percent > 100) p.add(where, `${String(c.type)} needs a percent between 1 and 100`);
       break;
     case 'anyOf':
       if (!Array.isArray(c.checks) || !c.checks.length) p.add(where, 'anyOf needs checks');

@@ -186,3 +186,58 @@ describe('MissionSession', () => {
     expect(b.run('ls x').result.exitCode).toBe(2);
   });
 });
+
+describe('host validators and initial state (services, DNS, disks)', () => {
+  const svc = {
+    files: {
+      '/opt/w/w': { content: 'bin\n', mode: '755' },
+      '/etc/systemd/system/w.service': '[Service]\nExecStart=/opt/w/w\n[Install]\nWantedBy=multi-user.target\n',
+    },
+    binaries: { '/opt/w/w': { listen: 8088, http: { '/': { body: 'w ok\n' } } } },
+  };
+
+  it('serviceActive / serviceEnabled follow systemctl', () => {
+    const before = stateWith([], svc);
+    expect(pass({ type: 'serviceActive', unit: 'w' }, before)).toBe(false);
+    expect(pass({ type: 'serviceActive', unit: 'w', state: 'inactive' }, before)).toBe(true);
+    expect(pass({ type: 'serviceEnabled', unit: 'w' }, before)).toBe(false);
+    const after = stateWith(['sudo systemctl enable --now w'], svc);
+    expect(pass({ type: 'serviceActive', unit: 'w.service' }, after)).toBe(true);
+    expect(pass({ type: 'serviceEnabled', unit: 'w' }, after)).toBe(true);
+    expect(pass({ type: 'httpResponds', url: 'http://localhost:8088', contains: 'w ok' }, after)).toBe(true);
+    expect(describeCheck({ type: 'serviceEnabled', unit: 'w' })).toBe('`w.service` should be enabled at boot');
+  });
+
+  it('serviceActive can expect a failed unit', () => {
+    const spec = { ...svc, binaries: { '/opt/w/w': { requireEnv: ['X'] } } };
+    const ctx = stateWith(['sudo systemctl start w'], spec);
+    expect(pass({ type: 'serviceActive', unit: 'w', state: 'failed' }, ctx)).toBe(true);
+  });
+
+  it('applies DNS records, remote hosts and perf figures', () => {
+    const ctx = stateWith(['dig +short db.test', 'curl -s http://db.test/', 'uptime'], {
+      dns: [{ name: 'db.test', type: 'A', value: '10.1.2.3', ttl: 60 }],
+      remotes: [{ ip: '10.1.2.3', up: true, latency: 1, services: { 80: { kind: 'http', body: 'remote!\n' } } }],
+      perf: { load: [9.5, 8, 7] },
+    });
+    expect(ctx.outputs).toEqual(['10.1.2.3\n', 'remote!\n', expect.stringContaining('load average: 9.50, 8.00, 7.00')]);
+  });
+
+  it('diskUsageBelow / inodeUsageBelow, big files and bulk files', () => {
+    const full = stateWith([], { files: { '/var/log/big.log': { content: 'x\n', size: 15 * 1024 ** 3 } } });
+    expect(pass({ type: 'diskUsageBelow', mount: '/', percent: 90 }, full)).toBe(false);
+    expect(pass({ type: 'diskUsageBelow', mount: '/var/log', percent: 95 }, full)).toBe(false); // same filesystem as /
+    const freed = stateWith(['sudo rm /var/log/big.log'], { files: { '/var/log/big.log': { content: 'x\n', size: 15 * 1024 ** 3 } } });
+    expect(pass({ type: 'diskUsageBelow', mount: '/', percent: 90 }, freed)).toBe(true);
+
+    const spec = {
+      disks: [{ mount: '/srv', filesystem: '/dev/sdc1', size: 1024, used: 0, inodes: 100, inodesUsed: 0 }],
+      bulkFiles: [{ dir: '/srv/cache', prefix: 'c_', count: 95, owner: 'student' }],
+    };
+    const inodes = stateWith(['df -i /srv'], spec);
+    expect(inodes.outputs[0]).toMatch(/\/dev\/sdc1 +100 +97 +3 +97% \/srv\n$/);
+    expect(pass({ type: 'inodeUsageBelow', mount: '/srv', percent: 50 }, inodes)).toBe(false);
+    const cleaned = stateWith(["sudo find /srv/cache -name 'c_*' -delete"], spec);
+    expect(pass({ type: 'inodeUsageBelow', mount: '/srv', percent: 50 }, cleaned)).toBe(true);
+  });
+});

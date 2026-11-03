@@ -12,16 +12,21 @@ describe('lesson catalog', () => {
       'linux-basics', 'files-permissions', 'processes', 'text-processing',
       'docker-basics', 'images-dockerfile', 'volumes-networks', 'compose', 'troubleshooting',
       'foundations', 'networking', 'storage-databases', 'system-design', 'sre',
+      'systemd', 'network-tools', 'performance',
     ]);
     const missions = lessons.flatMap((l) => l.missions);
-    expect(missions.filter((m) => m.type === 'guided' || m.type === 'free')).toHaveLength(16); // 8 Linux + 8 Docker
-    expect(missions.filter((m) => m.type === 'boss')).toHaveLength(3);
+    expect(missions.filter((m) => m.type === 'guided' || m.type === 'free')).toHaveLength(23); // 8 Linux + 8 Docker + 7 services/network/performance
+    expect(missions.filter((m) => m.type === 'boss')).toHaveLength(7);
     expect(missions.filter((m) => m.type === 'quiz').length).toBeGreaterThanOrEqual(20);
   });
 
-  it('hands-on lessons form a chain; theory lessons are open from the start', () => {
+  it('hands-on lessons build on earlier ones; theory lessons are open from the start', () => {
     const handsOn = lessons.filter((l) => l.missions.some((m) => m.type !== 'quiz'));
-    handsOn.slice(1).forEach((l, i) => expect(l.prerequisites).toEqual([handsOn[i].id]));
+    handsOn.slice(1).forEach((l, i) => {
+      const earlier = handsOn.slice(0, i + 1).map((x) => x.id);
+      expect(l.prerequisites.length, l.id).toBe(1);
+      expect(earlier, l.id).toContain(l.prerequisites[0]);
+    });
     for (const l of lessons.filter((x) => x.missions.every((m) => m.type === 'quiz'))) {
       expect(l.prerequisites).toEqual([]);
       expect(l.sources?.length).toBeGreaterThan(0);

@@ -1,6 +1,6 @@
 import { createShell } from '../sim';
 import { identityOf } from '../sim/shell/identity';
-import { createInitialState, Process, SimState } from '../sim/state';
+import { createInitialState, Process, refreshProc, SimState } from '../sim/state';
 import { dirname, isWithin, normalize, splitPath } from '../sim/vfs/path';
 import { makeDir, Vfs } from '../sim/vfs/vfs';
 import type { FileSpec, InitialStateSpec } from './types';
@@ -45,9 +45,24 @@ export function buildInitialState(spec: InitialStateSpec = {}): SimState {
       if (!vfs.exists(path)) vfs.mkdir(path);
     } else {
       vfs.writeFile(path, file.content ?? '');
+      if (file.size !== undefined) {
+        const node = vfs.lookup(path);
+        if (node.type === 'file') node.size = file.size;
+      }
     }
     vfs.chown(path, file.owner ?? owner, file.group ?? file.owner ?? group);
     vfs.chmod(path, file.mode ? parseInt(file.mode, 8) : file.type === 'dir' ? 0o755 : 0o644);
+  }
+
+  for (const b of spec.bulkFiles ?? []) {
+    const dir = normalize(b.dir);
+    if (!vfs.exists(dir)) vfs.mkdir(dir, { parents: true });
+    const owner = b.owner ?? defaultOwner(state, dir).owner;
+    for (let n = 1; n <= b.count; n++) {
+      const path = `${dir}/${b.prefix}${n}`;
+      vfs.writeFile(path, b.content ?? '');
+      vfs.chown(path, owner, owner);
+    }
   }
 
   if (spec.user) {
@@ -84,6 +99,19 @@ export function buildInitialState(spec: InitialStateSpec = {}): SimState {
   }
 
   Object.assign(state.network, spec.network ?? {});
+
+  if (spec.binaries && state.systemd) Object.assign(state.systemd.binaries, spec.binaries);
+  if (spec.dns && state.net) state.net.records.push(...spec.dns);
+  if (spec.remotes && state.net) state.net.remotes.push(...spec.remotes);
+  if (spec.perf && state.perf) {
+    state.perf = { ...state.perf, ...spec.perf };
+    refreshProc(state);
+  }
+  for (const d of spec.disks ?? []) {
+    const existing = state.disks.find((x) => x.mount === d.mount);
+    if (existing) Object.assign(existing, d);
+    else state.disks.push({ filesystem: d.filesystem ?? `/dev/sdb1`, size: d.size ?? 10485760, used: d.used ?? 0, ...d });
+  }
 
   if (spec.setup?.length) {
     const shell = createShell(state);

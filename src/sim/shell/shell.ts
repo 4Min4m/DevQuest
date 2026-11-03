@@ -1,6 +1,7 @@
 import type { SimState } from '../state';
 import { resolvePath } from '../vfs/path';
 import { isVfsError } from '../vfs/types';
+import { spaceGuard } from '../disk';
 import { Vfs } from '../vfs/vfs';
 import { wordText } from './ast';
 import type { Pipeline, Redirect, SimpleCommand, Word } from './ast';
@@ -20,12 +21,11 @@ type Sink =
 
 /** Real commands we deliberately don't simulate (yet): say so instead of "not found". */
 const NOT_SIMULATED = new Set([
-  'sed', 'awk', 'less', 'more', 'sudo', 'su', 'apt', 'apt-get', 'yum',
-  'systemctl', 'journalctl', 'ssh', 'scp', 'wget', 'tar', 'gzip', 'ln', 'stat', 'file', 'top',
-  'htop', 'tr', 'cut', 'xargs', 'tee', 'diff', 'which', 'man', 'ping', 'ip', 'ss', 'netstat',
-  'lsof', 'free', 'uptime', 'date', 'git', 'python', 'python3', 'node', 'make', 'bash', 'sh',
-  'docker-compose',
-  'kubectl',
+  'awk', 'less', 'more', 'su', 'apt', 'apt-get', 'yum', 'ssh', 'scp', 'wget', 'tar', 'gzip',
+  'ln', 'stat', 'file', 'htop', 'tr', 'cut', 'xargs', 'diff', 'which', 'man', 'date', 'git',
+  'python', 'python3', 'node', 'make', 'bash', 'sh', 'docker-compose', 'kubectl',
+  'tcpdump', 'strace', 'iostat', 'iotop', 'mpstat', 'pidstat', 'perf', 'iftop', 'nethogs', 'mtr',
+  'iptables', 'nft', 'lsblk', 'mount', 'ncdu', 'watch', 'nc', 'telnet', 'dmesg',
 ]);
 
 /** Commands that don't exist inside containers. */
@@ -86,9 +86,13 @@ export class Shell {
     });
   }
 
+  /** Standard input for the current line (e.g. what `echo x | sudo tee f` hands to the inner shell). */
+  private lineStdin = '';
+
   /** Execute one line of input exactly like an interactive bash prompt would. */
-  run(line: string): RunResult {
+  run(line: string, stdin = ''): RunResult {
     if (this.nested) return this.runNested(line);
+    this.lineStdin = stdin;
     this.output = [];
     this.clearRequested = false;
     this.editRequest = undefined;
@@ -163,7 +167,8 @@ export class Shell {
 
   private vfs(): Vfs {
     const state = this.state;
-    return new Vfs(state.fs, identityOf(state), () => state.clock);
+    // Containers have their own filesystem; disk quotas apply to the host's mounts.
+    return new Vfs(state.fs, identityOf(state), () => state.clock, state.context ? undefined : spaceGuard(state));
   }
 
   private expandCtx(vfs: Vfs): ExpandContext {
@@ -181,7 +186,7 @@ export class Shell {
   }
 
   private runPipeline(pipeline: Pipeline): number {
-    let stdin = '';
+    let stdin = this.lineStdin;
     let code = 0;
     pipeline.commands.forEach((cmd, i) => {
       const isLast = i === pipeline.commands.length - 1;
@@ -213,6 +218,7 @@ export class Shell {
     const redirectError = this.applyRedirects(cmd.redirects, sinks, vfs, ectx, (input) => (stdin = input));
     if (redirectError !== null) return { code: redirectError, piped: '' };
 
+    let writeError: string | null = null;
     const write = (fd: 1 | 2, text: string, note = false) => {
       const sink = sinks[fd];
       switch (sink.kind) {
@@ -225,8 +231,9 @@ export class Shell {
         case 'file':
           try {
             vfs.writeFile(sink.path, text, { append: true });
-          } catch {
-            /* target vanished mid-command; drop output like a closed fd */
+          } catch (e) {
+            // A full disk is reported once the command finishes; a vanished target is dropped like a closed fd.
+            if (isVfsError(e) && e.code === 'ENOSPC') writeError ??= e.message;
           }
           break;
         case 'null':
@@ -281,6 +288,11 @@ export class Shell {
         write(2, `${name}: internal simulator error: ${(e as Error).message}\n`);
         code = 1;
       }
+    }
+    if (writeError !== null) {
+      const builtin = name === 'echo' || name === 'printf';
+      this.emit('stderr', builtin ? `bash: ${name}: write error: ${writeError}\n` : `${name}: write error: ${writeError}\n`);
+      if (code === 0) code = 1;
     }
     state.commandLog.push(state.context ? { argv, exitCode: code, container: state.context.containerName } : { argv, exitCode: code });
     return { code, piped };

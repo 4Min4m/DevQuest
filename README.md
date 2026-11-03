@@ -20,12 +20,20 @@ browser terminal. No backend, no runtime network calls. See [CLAUDE.md](CLAUDE.m
   CI and GitHub Pages deployment.
 - **Step 7 done:** knowledge checks (quiz missions) and the **Theory & interviews** track, built from
   the knowledge vault: Foundations, Networking, Storage & Databases, System Design, SRE (22 checks).
+- **Step 8 done:** the rest of Linux plus network tools. `sudo`, simulated **systemd** (unit files,
+  `systemctl`, `journalctl`, restart loops, `daemon-reload`), a simulated **network** (DNS zone,
+  `/etc/hosts`, remote hosts: `dig`, `nslookup`, `host`, `ping`, `traceroute`, `ss`, `netstat`, `ip`,
+  `curl -v / -w`), **performance** tools (`top`, `free`, `uptime`, `vmstat`, `pgrep`, `lsof`,
+  `ulimit`, `/proc`), real disk accounting (`df -i`, ENOSPC for full disks and exhausted inodes),
+  and `sed` / `tee`. Three new Linux lessons (Services, Network troubleshooting, Performance &
+  disks) with 7 missions, 3 knowledge checks and 4 boss fights: a crash-looping API,
+  "it's always DNS", disk full at 2 AM, and inode exhaustion.
 
 ### Roadmap (from the knowledge vault)
 
 | Step | Chapters | What gets built |
 |---|---|---|
-| 8 | 03 Linux (rest), 02 Networking tools | `systemctl`/`journalctl`, `ss`, `lsof`, `ulimit`, `top`/`free`/`uptime`/`df -i`, `dig`/`ping`/`traceroute`, `curl -v` + boss fights |
+| ~~8~~ | 03 Linux (rest), 02 Networking tools | ✅ done (see above) |
 | 9 | 01 Version Control | Git simulator (commit, branch, merge, rebase, stash, cherry-pick, remotes) + missions |
 | 10–11 | 05 Kubernetes | `kubectl` simulator: workloads, services, config, probes, scheduling, HPA, storage, RBAC, Helm |
 | 12 | 06 CI/CD, GitOps | Pipeline runner (GitHub Actions / GitLab CI), deployment strategies, ArgoCD-style sync |
@@ -55,7 +63,10 @@ src/sim/docker/             Docker engine: catalog (offline registry), programs 
                             containers: nginx, postgres, redis, python/node apps...), engine,
                             build.ts (Dockerfile), compose.ts (Compose v2),
                             cli/ (docker run, ps, exec, logs, build, compose, volume, network...)
-src/sim/net.ts              simulated HTTP for curl (containers register as providers)
+src/sim/net.ts              simulated HTTP for curl (containers, services, remote hosts register as providers)
+src/sim/netsim/             DNS zone, /etc/hosts resolution, remote hosts; dig, ping, ss, ip...
+src/sim/systemd/            unit-file parser, service manager (failure modes), systemctl, journalctl
+src/sim/disk.ts             disk usage per mount (bytes + inodes) and the ENOSPC guard
 src/game/                   mission engine: initial-state builder, validators, MissionSession;
                             progress.ts (XP, levels, streak, hearts, unlocking, skill tree),
                             store.ts (Zustand store persisted to localStorage)
@@ -68,8 +79,13 @@ scripts/sim-cli.ts          run the simulator in a real terminal
 
 ## Simulated commands
 
-`ls cd pwd cat echo touch mkdir rm cp mv head tail grep find wc sort uniq chmod chown
-ps kill whoami id env export unset df du curl help history clear true false`
+`ls cd pwd cat echo touch mkdir rm cp mv head tail grep find wc sort uniq sed tee chmod chown
+ps kill whoami id env export unset df du curl help history clear true false sudo`
+
+Services and diagnostics: `systemctl` (status, start, stop, restart, reload, enable, disable,
+is-active, is-enabled, is-failed, cat, daemon-reload, list-units, reset-failed), `journalctl`
+(`-u`, `-n`, `-p`, `-xeu`), `dig`, `nslookup`, `host`, `ping`, `traceroute`, `ss`, `netstat`, `ip`,
+`hostname`, `top`, `free`, `uptime`, `vmstat`, `nproc`, `pgrep`, `lsof`, `ulimit`.
 
 `docker`: `run create ps start stop restart kill rm logs exec port inspect images pull rmi`,
 `volume create|ls|rm|inspect|prune`, `network create|ls|rm|inspect|connect|disconnect`,
@@ -78,7 +94,7 @@ aliases. Offline images: nginx, httpd, redis, postgres, mysql, alpine, busybox, 
 hello-world, curlimages/curl. `nano FILE` (also `vi`/`vim`) opens a simple editor in the browser.
 
 Run `<command> --help` to see which options the simulator supports. Real commands that
-aren't simulated yet (e.g. `sed`, `vim`, `sudo`) say so explicitly instead of failing silently.
+aren't simulated yet (e.g. `awk`, `tcpdump`, `strace`) say so explicitly instead of failing silently.
 
 ## Deploy
 
@@ -158,7 +174,13 @@ Check types: `fileExists`, `fileMissing`, `fileContains` (text / regex / equals)
 `fileOwner`, `cwd`, `varEquals`, `processRunning`, `processAbsent`, `commandUsed`,
 `outputContains`, `anyOf`, `not`, and for Docker: `containerRunning`, `containerAbsent`,
 `containerPort`, `containerEnv`, `containerMount`, `containerNetwork`, `containerInspect`,
-`containerFile`, `imageExists`, `imageInspect`, `volumeExists`, `networkExists`, `httpResponds`.
+`containerFile`, `imageExists`, `imageInspect`, `volumeExists`, `networkExists`, `httpResponds`,
+and for the host: `serviceActive`, `serviceEnabled`, `diskUsageBelow`, `inodeUsageBelow`.
+
+Host scenarios can also set `binaries` (what a program does when systemd runs it: port, required
+env vars/files, DB connection, open-file needs), `dns` records, `remotes` (hosts on the network),
+`perf` (load, memory, CPU), `disks` (sizes and inode counts), `bulkFiles` (thousands of small files)
+and a file `size` (an 18 GB log without 18 GB of content).
 
 `initialState.setup` runs real shell commands (e.g. `docker run ...`) to build the starting
 machine, so boss fights can start from a genuinely broken system. The content QA test (`src/content/content.test.ts`) proves every

@@ -1,21 +1,18 @@
 import { parseArgs } from '../../shell/args';
 import type { CommandContext, CommandDef } from '../../shell/types';
-import type { Disk } from '../../state';
-import { isWithin, joinPath } from '../../vfs/path';
+import { diskUsage, mountFor } from '../../disk';
+import { joinPath } from '../../vfs/path';
 import { nodeSize } from '../../vfs/vfs';
 import { alignRows, errText, humanSize } from './util';
 
-function mountFor(disks: Disk[], abs: string): Disk | undefined {
-  return [...disks].sort((a, b) => b.mount.length - a.mount.length).find((d) => isWithin(abs, d.mount));
-}
-
 export const df: CommandDef = {
   name: 'df',
-  summary: 'report file system disk space usage',
+  summary: 'report file system disk space (or inode) usage',
   run(ctx) {
-    const p = parseArgs(ctx, { flags: 'h', long: { 'human-readable': 'h' } });
+    const p = parseArgs(ctx, { flags: 'hi', long: { 'human-readable': 'h', inodes: 'i' } });
     if (typeof p === 'number') return p;
     const human = p.flags.has('h');
+    const inodes = p.flags.has('i');
     let disks = ctx.state.disks;
     let code = 0;
     if (p.operands.length) {
@@ -32,16 +29,29 @@ export const df: CommandDef = {
       }
       if (!disks.length) return code;
     }
-    const fmt = (kb: number) => (human ? humanSize(kb * 1024) : String(kb));
-    const rows = [
-      // GNU df gives the first column at least 14 chars and -h sizes at least 5.
-      ['Filesystem'.padEnd(14), human ? ' Size' : '1K-blocks', human ? ' Used' : 'Used', human ? 'Avail' : 'Available', 'Use%', 'Mounted on'],
-      ...disks.map((d) => {
-        const avail = Math.max(0, d.size - d.used);
-        const pct = d.size === 0 ? '-' : `${Math.ceil((d.used / d.size) * 100)}%`;
-        return [d.filesystem, fmt(d.size), fmt(d.used), fmt(avail), pct, d.mount];
-      }),
-    ];
+    const pct = (used: number, total: number) => (total === 0 ? '-' : `${Math.ceil((used / total) * 100)}%`);
+    let rows: string[][];
+    if (inodes) {
+      // df -hi shows counts with K/M suffixes (powers of 1024).
+      const n = (v: number) => (human ? humanSize(v).replace(/(\.\d)?([KMGT])$/, '$1$2') : String(v));
+      rows = [
+        ['Filesystem'.padEnd(14), 'Inodes', 'IUsed', 'IFree', 'IUse%', 'Mounted on'],
+        ...disks.map((d) => {
+          const u = diskUsage(ctx.state, d);
+          return [d.filesystem, n(u.inodes), n(u.inodesUsed), n(u.inodes - u.inodesUsed), pct(u.inodesUsed, u.inodes), d.mount];
+        }),
+      ];
+    } else {
+      const fmt = (kb: number) => (human ? humanSize(kb * 1024) : String(kb));
+      rows = [
+        // GNU df gives the first column at least 14 chars and -h sizes at least 5.
+        ['Filesystem'.padEnd(14), human ? ' Size' : '1K-blocks', human ? ' Used' : 'Used', human ? 'Avail' : 'Available', 'Use%', 'Mounted on'],
+        ...disks.map((d) => {
+          const u = diskUsage(ctx.state, d);
+          return [d.filesystem, fmt(u.sizeKb), fmt(u.usedKb), fmt(u.availKb), pct(u.usedKb, u.sizeKb), d.mount];
+        }),
+      ];
+    }
     for (const line of alignRows(rows, [0, 5])) ctx.out(line + '\n');
     return code;
   },

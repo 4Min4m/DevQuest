@@ -3,6 +3,8 @@ import { DockerEngine } from '../sim/docker/engine';
 import type { Container } from '../sim/docker/types';
 import { httpRequest, parseUrl } from '../sim/net';
 import type { SimState } from '../sim/state';
+import { diskUsage, mountFor } from '../sim/disk';
+import { unitName } from '../sim/systemd/unitfile';
 import { normalize } from '../sim/vfs/path';
 import type { FsNode } from '../sim/vfs/types';
 import { Vfs } from '../sim/vfs/vfs';
@@ -95,6 +97,14 @@ export function describe(check: Check): string {
       return `network \`${check.name}\` should exist`;
     case 'httpResponds':
       return `${check.url} should respond${check.contains ? ` with \`${check.contains}\`` : ''}`;
+    case 'serviceActive':
+      return `\`${unitName(check.unit)}\` should be ${check.state ?? 'active'}`;
+    case 'serviceEnabled':
+      return `\`${unitName(check.unit)}\` should be ${check.enabled === false ? 'disabled' : 'enabled'} at boot`;
+    case 'diskUsageBelow':
+      return `the filesystem holding \`${check.mount}\` should be under ${check.percent}% full`;
+    case 'inodeUsageBelow':
+      return `the filesystem holding \`${check.mount}\` should use under ${check.percent}% of its inodes`;
   }
 }
 
@@ -240,6 +250,22 @@ function evaluate(check: Check, ctx: ValidationContext): boolean {
       if (check.status !== undefined ? r.res.status !== check.status : r.res.status >= 400) return false;
       return check.contains === undefined || r.res.body.includes(check.contains);
     }
+    case 'serviceActive': {
+      const rt = state.systemd?.units[unitName(check.unit)];
+      return (rt?.active ?? 'inactive') === (check.state ?? 'active');
+    }
+    case 'serviceEnabled': {
+      const rt = state.systemd?.units[unitName(check.unit)];
+      return (rt?.enabled ?? false) === (check.enabled ?? true);
+    }
+    case 'diskUsageBelow':
+    case 'inodeUsageBelow': {
+      const d = mountFor(state.disks, normalize(check.mount));
+      if (!d) return false;
+      const u = diskUsage(state, d);
+      const pct = check.type === 'diskUsageBelow' ? (u.usedKb / (u.usedKb + u.availKb)) * 100 : (u.inodesUsed / u.inodes) * 100;
+      return pct < check.percent;
+    }
   }
 }
 
@@ -262,4 +288,5 @@ export const CHECK_TYPES: readonly Check['type'][] = [
   'processRunning', 'processAbsent', 'commandUsed', 'outputContains', 'anyOf', 'not',
   'containerRunning', 'containerAbsent', 'containerPort', 'containerEnv', 'containerMount', 'containerNetwork',
   'containerInspect', 'containerFile', 'imageExists', 'imageInspect', 'volumeExists', 'networkExists', 'httpResponds',
+  'serviceActive', 'serviceEnabled', 'diskUsageBelow', 'inodeUsageBelow',
 ];

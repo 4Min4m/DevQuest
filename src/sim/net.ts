@@ -23,10 +23,13 @@ export interface RequestOptions {
 
 export type HttpProvider = (state: SimState, req: Request, opts: RequestOptions) => HttpResult | undefined;
 
-const providers: HttpProvider[] = [];
+const providers: { p: HttpProvider; priority: number }[] = [];
 
-export function registerHttpProvider(p: HttpProvider): void {
-  if (!providers.includes(p)) providers.push(p);
+/** Lower priority runs first; general fallbacks (like remote hosts) use a high number. */
+export function registerHttpProvider(p: HttpProvider, priority = 0): void {
+  if (providers.some((x) => x.p === p)) return;
+  providers.push({ p, priority });
+  providers.sort((a, b) => a.priority - b.priority);
 }
 
 export const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]']);
@@ -46,7 +49,7 @@ export function parseUrl(raw: string, method = 'GET'): Request | null {
 
 /** Resolve a request: dynamic providers first, then static endpoints, then connection errors. */
 export function httpRequest(state: SimState, req: Request, opts: RequestOptions = {}): HttpResult {
-  for (const p of providers) {
+  for (const { p } of providers) {
     const r = p(state, req, opts);
     if (r) return r;
   }

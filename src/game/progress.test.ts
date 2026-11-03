@@ -244,3 +244,14 @@ describe('MissionSession failure', () => {
     expect(s.hasMoreHints).toBe(false);
   });
 });
+
+describe('lessonsInTreeOrder', () => {
+  it('groups lessons by skill-tree branch order', async () => {
+    const { lessons } = await import('../content');
+    const { lessonsInTreeOrder } = await import('./progress');
+    const ids = lessonsInTreeOrder(lessons).map((l) => l.id);
+    expect(ids.indexOf('performance')).toBeLessThan(ids.indexOf('docker-basics'));
+    expect(ids.indexOf('text-processing')).toBeLessThan(ids.indexOf('systemd'));
+    expect(ids[0]).toBe('foundations');
+  });
+});

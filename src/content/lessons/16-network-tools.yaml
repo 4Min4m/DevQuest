@@ -1,0 +1,271 @@
+id: network-tools
+title: Network troubleshooting
+branch: network-tools
+prerequisites: [systemd]
+sources:
+  - 03-Linux/03-Networking-Tools
+  - 02-Networking/02-DNS
+  - 02-Networking/01-OSI-and-TCP-IP
+theory: |
+  "The app can't reach X" — work **bottom-up** and let each tool answer one question:
+
+  | Question | Tool |
+  |---|---|
+  | Does the name resolve, and to what? | `dig +short NAME` (DNS only), `ping -c 1 NAME` (uses /etc/hosts too) |
+  | Is the host reachable? | `ping -c 3 HOST`, `traceroute HOST` |
+  | Is anything listening on the port? | `sudo ss -tlnp` (local), `curl -v HOST:PORT` |
+  | Does the app answer correctly? | `curl -s -o /dev/null -w '%{http_code}' URL` |
+
+  **Name resolution order:** most programs check **`/etc/hosts` first**, then DNS
+  (`/etc/resolv.conf` → nameserver). `dig` and `nslookup` talk to DNS **directly** and ignore
+  `/etc/hosts` — so when `dig` and `curl` disagree, look at `/etc/hosts`.
+
+  **curl's exit codes tell you which layer failed:**
+  `6` couldn't resolve host · `7` connection refused (host up, nothing listening) ·
+  `28` timed out (host down or firewalled) · `22` HTTP error with `-f`.
+
+  `ss -tlnp` = **t**cp, **l**istening, **n**umeric ports, **p**rocesses (needs sudo to see other users' processes).
+missions:
+  - id: who-listens
+    title: What's on that port?
+    type: guided
+    prompt: |
+      A monitoring agent was installed on this box, but nobody wrote down which port it uses.
+
+      **Find the port `metrics-agent` is listening on, and fetch its `/status` page with curl.**
+    initialState:
+      files:
+        /opt/agent/metrics-agent:
+          content: "\x7fELF (compiled program)\n"
+          mode: "755"
+        /etc/systemd/system/metrics-agent.service: |
+          [Unit]
+          Description=Metrics agent
+
+          [Service]
+          ExecStart=/opt/agent/metrics-agent
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+      binaries:
+        /opt/agent/metrics-agent:
+          name: metrics-agent
+          listen: 9273
+          startLog: ["agent ready"]
+          http:
+            /status: { body: "agent status: OK (scrapes=48211, uptime=10d)\n" }
+      setup:
+        - sudo systemctl enable --now metrics-agent
+    hints:
+      - text: "`ss -tlnp` lists listening TCP ports. Without sudo you won't see processes owned by root."
+        cost: 5
+      - text: "`sudo ss -tlnp | grep metrics` shows the agent's line; the port is after the colon in Local Address."
+        cost: 5
+      - text: It's 9273, so `curl localhost:9273/status`.
+        cost: 10
+    validator:
+      checks:
+        - type: commandUsed
+          command: ss
+          message: Find the port with `ss` instead of guessing.
+        - type: outputContains
+          text: "agent status: OK"
+          message: Fetch the agent's /status page with curl.
+    xp: 40
+    par: 3
+    solution:
+      - sudo ss -tlnp
+      - curl localhost:9273/status
+    explain: |
+      `sudo ss -tlnp` is the fastest way to answer "who listens on what". `lsof -i :9273` answers the
+      reverse question — which process holds a given port.
+
+  - id: stale-hosts
+    title: dig says one thing, curl another
+    type: guided
+    prompt: |
+      `curl http://api.shop.internal/health` hangs and times out, yet the API team swears their
+      service is up and DNS is correct.
+
+      **Find out why this machine can't reach it and fix it**, so the health check answers.
+    initialState:
+      files:
+        /etc/hosts: |
+          127.0.0.1	localhost
+          127.0.1.1	devquest
+          # temporary during migration - REMOVE AFTER CUTOVER
+          10.0.5.20	api.shop.internal
+
+          ::1	ip6-localhost ip6-loopback
+      dns:
+        - { name: api.shop.internal, type: A, value: 10.0.5.31, ttl: 300 }
+      remotes:
+        - ip: 10.0.5.31
+          name: api.shop.internal
+          up: true
+          latency: 0.8
+          hops: [_gateway (10.0.1.1)]
+          services:
+            80: { kind: http, body: "{\"status\":\"healthy\"}\n" }
+    hints:
+      - text: Compare what DNS says (`dig +short api.shop.internal`) with the address curl tries (`curl -v`).
+        cost: 5
+      - text: "curl uses `/etc/hosts` before DNS; dig doesn't. Look at `/etc/hosts`."
+        cost: 5
+      - text: "Delete the stale line: `sudo sed -i '/api.shop.internal/d' /etc/hosts`."
+        cost: 10
+    validator:
+      checks:
+        - type: httpResponds
+          url: http://api.shop.internal/health
+          contains: healthy
+          message: "`curl http://api.shop.internal/health` should answer."
+        - type: not
+          check: { type: fileContains, path: /etc/hosts, text: "10.0.5.20" }
+          message: The stale 10.0.5.20 entry should be gone from /etc/hosts.
+      guards:
+        - type: fileContains
+          path: /etc/hosts
+          text: "127.0.0.1\tlocalhost"
+          message: Keep the localhost line in /etc/hosts.
+    xp: 50
+    par: 4
+    solution:
+      - dig +short api.shop.internal
+      - sudo sed -i '/api.shop.internal/d' /etc/hosts
+      - curl api.shop.internal/health
+    explain: |
+      A forgotten `/etc/hosts` override is a classic: it beats DNS for curl, browsers and apps, but `dig`
+      never reads it — so DNS "looks fine". When tools disagree about an address, check `/etc/hosts`.
+
+  - id: network-check
+    title: "Knowledge check: which layer broke?"
+    type: quiz
+    prompt: Read the symptom, name the layer.
+    xp: 30
+    questions:
+      - kind: order
+        prompt: Put the troubleshooting steps in bottom-up order for "the app can't reach db.internal:5432".
+        items:
+          - "Resolve the name: dig +short db.internal"
+          - "Check reachability: ping -c 3 <ip>"
+          - "Check the port: curl -v telnet://<ip>:5432 or ss on the DB host"
+          - "Check the application: credentials, TLS, app logs"
+      - kind: single
+        prompt: "`curl: (7) Failed to connect to 10.0.3.4 port 8080: Connection refused`. What does this tell you?"
+        options:
+          - DNS is broken
+          - The host answered, but nothing is listening on port 8080
+          - A firewall silently drops the packets
+          - The server returned HTTP 500
+        answer: 1
+        explain: A refusal is an active "no" from the host (a TCP RST). Silent drops show up as timeouts (exit 28).
+      - kind: number
+        prompt: Which curl exit code means "Could not resolve host"?
+        answer: 6
+      - kind: single
+        prompt: "`dig +short shop.internal` prints 10.0.2.9, but `curl shop.internal` connects to 10.0.9.99. Where do you look first?"
+        options:
+          - /etc/resolv.conf
+          - /etc/hosts
+          - The DNS server's zone file
+          - The application's config
+        answer: 1
+        explain: dig asks DNS directly; curl resolves via /etc/hosts first.
+      - kind: multi
+        prompt: Which commands show which process is listening on port 443?
+        options:
+          - sudo ss -tlnp
+          - sudo lsof -i :443
+          - ping localhost
+          - sudo netstat -tlnp
+        answers: [0, 1, 3]
+
+  - id: boss-always-dns
+    title: "Boss: it's always DNS"
+    type: boss
+    prompt: |
+      🚨 **Incident:** checkout is down after last night's database migration. `checkout.service`
+      keeps restarting and the storefront shows "payment unavailable".
+
+      Find the root cause and fix it **properly** (point checkout at the right database name — no
+      `/etc/hosts` hacks). Checkout must be active and `http://localhost:8443/health` must answer.
+    initialState:
+      files:
+        /opt/checkout/checkout:
+          content: "\x7fELF (compiled program)\n"
+          mode: "755"
+        /etc/checkout/checkout.env: |
+          DB_HOST=db.internal
+          DB_PORT=5432
+          PAYMENT_PROVIDER=sandbox
+        /etc/systemd/system/checkout.service: |
+          [Unit]
+          Description=Checkout service
+          After=network-online.target
+
+          [Service]
+          ExecStart=/opt/checkout/checkout
+          EnvironmentFile=/etc/checkout/checkout.env
+          Restart=on-failure
+
+          [Install]
+          WantedBy=multi-user.target
+        /srv/runbooks/databases.md: |
+          # Databases
+
+          | Env  | Name              | Port |
+          |------|-------------------|------|
+          | prod | db.prod.internal  | 5432 |
+          | stg  | db.stg.internal   | 5432 |
+
+          The old `db.internal` record was deleted in the Nov migration (INFRA-2291).
+      dns:
+        - { name: db.prod.internal, type: A, value: 10.0.7.12, ttl: 300 }
+        - { name: db.stg.internal, type: A, value: 10.0.8.12, ttl: 300 }
+      remotes:
+        - ip: 10.0.7.12
+          name: db.prod.internal
+          up: true
+          latency: 0.6
+          services:
+            5432: { kind: tcp }
+      binaries:
+        /opt/checkout/checkout:
+          name: checkout
+          listen: 8443
+          connect: { hostEnv: DB_HOST, port: 5432 }
+          startLog: ["connected to postgres", "checkout listening on :{port}"]
+          http:
+            /health: { body: "{\"status\":\"ok\",\"payments\":\"up\"}\n" }
+      setup:
+        - sudo systemctl enable --now checkout
+    hints: []
+    validator:
+      checks:
+        - type: serviceActive
+          unit: checkout
+        - type: httpResponds
+          url: http://localhost:8443/health
+          contains: '"status":"ok"'
+        - type: fileContains
+          path: /etc/checkout/checkout.env
+          regex: "DB_HOST=db\\.prod\\.internal"
+          message: checkout.env should point DB_HOST at the production database name.
+      guards:
+        - type: not
+          check: { type: fileContains, path: /etc/hosts, text: db. }
+          message: No /etc/hosts hacks — fix the configuration instead.
+    xp: 150
+    par: 7
+    solution:
+      - journalctl -u checkout -n 5
+      - dig +short db.prod.internal
+      - sudo sed -i 's/^DB_HOST=.*/DB_HOST=db.prod.internal/' /etc/checkout/checkout.env
+      - sudo systemctl restart checkout
+      - curl localhost:8443/health
+    explain: |
+      The journal said `lookup db.internal on 127.0.0.53:53: no such host` — an **NXDOMAIN**. The
+      migration deleted that record, and the runbook names the new one. Because the setting lives in an
+      `EnvironmentFile`, a **restart** is enough; `daemon-reload` is only needed when the unit file itself changes.

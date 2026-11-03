@@ -292,6 +292,9 @@ export const BRANCHES: { id: BranchId; title: string; icon: string; track: Track
   { id: 'files-permissions', title: 'Files & Permissions', icon: '🔐', track: 'linux' },
   { id: 'processes', title: 'Processes', icon: '⚙️', track: 'linux' },
   { id: 'text-processing', title: 'Text Processing', icon: '🔎', track: 'linux' },
+  { id: 'systemd', title: 'Services (systemd)', icon: '🛠️', track: 'linux' },
+  { id: 'network-tools', title: 'Network Troubleshooting', icon: '📡', track: 'linux' },
+  { id: 'performance', title: 'Performance & Disks', icon: '💾', track: 'linux' },
   { id: 'docker-basics', title: 'Docker Basics', icon: '🐳', track: 'containers' },
   { id: 'images-dockerfile', title: 'Images & Dockerfile', icon: '📦', track: 'containers' },
   { id: 'volumes-networks', title: 'Volumes & Networks', icon: '🔌', track: 'containers' },
@@ -304,6 +307,12 @@ export const BRANCHES: { id: BranchId; title: string; icon: string; track: Track
   { id: 'observability', title: 'Observability', icon: '📊', track: 'operations' },
   { id: 'security', title: 'Security', icon: '🛡️', track: 'operations' },
 ];
+
+/** Lessons grouped the way the skill tree shows them (by branch order, then file order). */
+export function lessonsInTreeOrder(all: Lesson[]): Lesson[] {
+  const rank = (l: Lesson) => BRANCHES.findIndex((b) => b.id === l.branch);
+  return all.map((l, i) => ({ l, i })).sort((a, b) => rank(a.l) - rank(b.l) || a.i - b.i).map((x) => x.l);
+}
 
 export type NodeStatus = 'locked' | 'available' | 'in-progress' | 'complete' | 'coming-soon';
 

@@ -1,0 +1,339 @@
+id: systemd
+title: Services with systemd
+branch: systemd
+prerequisites: [text-processing]
+sources:
+  - 03-Linux/01-Process-Management
+  - 03-Linux/04-Performance-Debugging
+theory: |
+  On a server, long-running programs (web apps, databases, agents) are **services** managed by
+  **systemd**. Each service is described by a **unit file** such as `/etc/systemd/system/web.service`:
+
+  ```ini
+  [Unit]
+  Description=My web app
+  After=network.target
+
+  [Service]
+  ExecStart=/opt/web/server        # absolute path to the program
+  Environment=PORT=8080            # or EnvironmentFile=/etc/web/web.env
+  User=www-data
+  Restart=on-failure               # bring it back if it crashes
+
+  [Install]
+  WantedBy=multi-user.target       # what `enable` hooks it into
+  ```
+
+  | Command | What it does |
+  |---|---|
+  | `systemctl status web` | state, main PID and the last log lines |
+  | `sudo systemctl start / stop / restart web` | now |
+  | `sudo systemctl enable web` | at boot (`enable --now` = both) |
+  | `sudo systemctl daemon-reload` | re-read unit files after you edit them |
+  | `journalctl -u web -n 50` | the service's logs (`-xeu web` for the latest, explained) |
+
+  Gotchas that bite everyone:
+  - **start ≠ enable.** Started services don't come back after a reboot unless enabled.
+  - `systemctl start` returns success as soon as the program is *launched* — it can crash a
+    second later. Always check `systemctl status` or the journal.
+  - After editing a unit file, run `daemon-reload` and then restart, or systemd keeps using the old one.
+  - Exit status **203/EXEC** means systemd couldn't run `ExecStart` at all: wrong path, or not executable.
+missions:
+  - id: webapp-up
+    title: Start it now, and at every boot
+    type: guided
+    prompt: |
+      The team installed `webapp.service`, but nobody turned it on. Last night's reboot
+      proved it: the site was down until someone noticed.
+
+      **Start `webapp` now, make it start automatically at boot, and check it answers
+      on `http://localhost:8080`.**
+    initialState:
+      files:
+        /opt/webapp/webapp:
+          content: "\x7fELF (compiled program)\n"
+          mode: "755"
+        /etc/systemd/system/webapp.service: |
+          [Unit]
+          Description=Shop web frontend
+          After=network.target
+
+          [Service]
+          ExecStart=/opt/webapp/webapp --port 8080
+          User=www-data
+          Restart=on-failure
+
+          [Install]
+          WantedBy=multi-user.target
+      binaries:
+        /opt/webapp/webapp:
+          name: webapp
+          listen: 8080
+          startLog: ["webapp 2.4.1 listening on :{port}"]
+          http:
+            /: { body: "webapp ok - shop frontend v2.4.1\n" }
+    hints:
+      - text: "`systemctl status webapp` shows two things: whether it's running (Active:) and whether it's enabled (on the Loaded: line)."
+        cost: 5
+      - text: Changing services needs root, so prefix the command with `sudo`.
+        cost: 5
+      - text: "`sudo systemctl enable --now webapp` does both in one go. Then `curl localhost:8080`."
+        cost: 10
+    validator:
+      checks:
+        - type: serviceActive
+          unit: webapp
+          message: "`webapp` should be running (systemctl start)."
+        - type: serviceEnabled
+          unit: webapp
+          message: "`webapp` should be enabled so it survives a reboot."
+        - type: httpResponds
+          url: http://localhost:8080
+          contains: webapp ok
+    xp: 40
+    par: 3
+    solution:
+      - sudo systemctl enable --now webapp
+      - curl localhost:8080
+    explain: |
+      `enable` creates a symlink in `multi-user.target.wants/`, which is how systemd knows to start the
+      service at boot. `--now` also starts it immediately, so it's both enabled **and** active.
+
+  - id: read-the-journal
+    title: Ask the journal
+    type: guided
+    prompt: |
+      `billing.service` was "started" fine according to the deploy script — `systemctl start`
+      returned 0 — but billing is down.
+
+      **Find out from the logs why it dies, fix the cause, and get `billing` running.**
+    initialState:
+      files:
+        /opt/billing/billing:
+          content: "\x7fELF (compiled program)\n"
+          mode: "755"
+        /etc/billing/config.yaml.example: |
+          # Copy to config.yaml and adjust.
+          currency: EUR
+          invoice_prefix: INV
+        /etc/systemd/system/billing.service: |
+          [Unit]
+          Description=Billing worker
+
+          [Service]
+          ExecStart=/opt/billing/billing --config /etc/billing/config.yaml
+          Restart=no
+
+          [Install]
+          WantedBy=multi-user.target
+      binaries:
+        /opt/billing/billing:
+          name: billing
+          listen: 9200
+          requireFiles: [/etc/billing/config.yaml]
+          startLog: ["loaded /etc/billing/config.yaml", "billing worker ready on :{port}"]
+          http:
+            /: { body: "billing ok\n" }
+      setup:
+        - sudo systemctl enable --now billing
+    hints:
+      - text: "`journalctl -u billing` prints everything the service logged."
+        cost: 5
+      - text: The program can't open its config file. Is there an example config next to where it looks?
+        cost: 5
+      - text: "`sudo cp /etc/billing/config.yaml.example /etc/billing/config.yaml`, then `sudo systemctl restart billing`."
+        cost: 10
+    validator:
+      checks:
+        - type: commandUsed
+          command: journalctl
+          message: Read the service's logs with `journalctl -u billing`.
+        - type: fileExists
+          path: /etc/billing/config.yaml
+        - type: serviceActive
+          unit: billing
+          message: "`billing` should be running."
+      guards:
+        - type: fileExists
+          path: /etc/billing/config.yaml.example
+          message: Keep the example config — don't move it away.
+    xp: 50
+    par: 4
+    solution:
+      - journalctl -u billing -n 10
+      - sudo cp /etc/billing/config.yaml.example /etc/billing/config.yaml
+      - sudo systemctl restart billing
+    explain: |
+      `systemctl start` only waits for the program to be *launched* (Type=simple). The crash came a moment
+      later and only shows up in `systemctl status` and `journalctl -u billing`. Logs first, guesses second.
+
+  - id: write-a-unit
+    title: Write your own unit file
+    type: free
+    prompt: |
+      There's a new metrics exporter at `/usr/local/bin/reportd`. It reads the port to listen on from
+      the `PORT` environment variable.
+
+      **Turn it into a proper service:**
+      - unit file `/etc/systemd/system/reportd.service`
+      - runs `/usr/local/bin/reportd` with `PORT=9100`
+      - restarts automatically if it crashes
+      - starts at boot, and is running now
+
+      `curl localhost:9100/metrics` should then show `reportd_up 1`.
+
+      Tip: `sudo nano /etc/systemd/system/reportd.service` opens an editor as root.
+    initialState:
+      files:
+        /usr/local/bin/reportd:
+          content: "\x7fELF (compiled program)\n"
+          mode: "755"
+      binaries:
+        /usr/local/bin/reportd:
+          name: reportd
+          portEnv: PORT
+          requireEnv: [PORT]
+          startLog: ["reportd exporting on :{port}/metrics"]
+          http:
+            /metrics: { body: "# HELP reportd_up Whether reportd is up.\n# TYPE reportd_up gauge\nreportd_up 1\nreports_generated_total 1729\n" }
+    hints: []
+    validator:
+      checks:
+        - type: fileContains
+          path: /etc/systemd/system/reportd.service
+          regex: "(^|\\n)ExecStart=/usr/local/bin/reportd"
+          message: The unit should run `/usr/local/bin/reportd` (ExecStart=...).
+        - type: fileContains
+          path: /etc/systemd/system/reportd.service
+          regex: "(^|\\n)Restart=(always|on-failure|on-abnormal)"
+          message: The unit should restart the program when it crashes (Restart=...).
+        - type: serviceEnabled
+          unit: reportd
+        - type: serviceActive
+          unit: reportd
+        - type: httpResponds
+          url: http://localhost:9100/metrics
+          contains: reportd_up 1
+    xp: 80
+    par: 3
+    solution:
+      - "echo -e '[Unit]\\nDescription=Report exporter\\n\\n[Service]\\nExecStart=/usr/local/bin/reportd\\nEnvironment=PORT=9100\\nRestart=always\\n\\n[Install]\\nWantedBy=multi-user.target' | sudo tee /etc/systemd/system/reportd.service"
+      - sudo systemctl enable --now reportd
+      - curl localhost:9100/metrics
+    explain: |
+      Three sections, three jobs: `[Unit]` describes it, `[Service]` says how to run it
+      (`ExecStart`, `Environment`, `Restart`), and `[Install]` says where `enable` hooks it in.
+      Without `WantedBy=`, `systemctl enable` has nothing to do.
+
+  - id: systemd-check
+    title: "Knowledge check: systemd"
+    type: quiz
+    prompt: Make sure the concepts stick before the boss fight.
+    xp: 30
+    questions:
+      - kind: single
+        prompt: You ran `sudo systemctl start api` and it printed nothing and exited 0. What do you know?
+        options:
+          - The api is running and healthy
+          - systemd launched the program; it may still have crashed right after
+          - The api will also start after a reboot
+          - The unit file has no errors at all
+        answer: 1
+        explain: For Type=simple services, start returns once the process is spawned. Check `systemctl status` / `journalctl -u api`.
+      - kind: single
+        prompt: "`systemctl status` shows `status=203/EXEC`. Most likely cause?"
+        options:
+          - The program ran out of memory
+          - The ExecStart path is wrong or the file isn't executable
+          - A port is already in use
+          - The service user's password expired
+        answer: 1
+        explain: 203/EXEC means systemd couldn't execute the binary at all.
+      - kind: order
+        prompt: You fixed a typo in `/etc/systemd/system/api.service`. Put the steps in order.
+        items:
+          - sudo systemctl daemon-reload
+          - sudo systemctl restart api
+          - systemctl status api
+        explain: Reload makes systemd re-read the file; restart applies it; status (or the journal) confirms it.
+      - kind: text
+        prompt: Which `[Install]` setting makes `systemctl enable` start a service at a normal multi-user boot? (key=value)
+        accept: ["WantedBy=multi-user.target", "/^WantedBy\\s*=\\s*multi-user\\.target$/i"]
+      - kind: multi
+        prompt: Which commands show a service's recent log lines?
+        options:
+          - journalctl -u api -n 50
+          - systemctl status api
+          - systemctl cat api
+          - journalctl -xeu api
+        answers: [0, 1, 3]
+        explain: "`systemctl cat` prints the unit file, not logs."
+
+  - id: boss-api-down
+    title: "Boss: the API won't stay up"
+    type: boss
+    prompt: |
+      🚨 **PagerDuty:** `api.service` is crash-looping on the new server. The deploy script copied
+      everything and enabled the unit, but health checks fail.
+
+      Get `api` running and answering `http://localhost:3000/health`. The database settings live in
+      `/etc/api/api.env` — **don't delete or change that file.**
+    initialState:
+      files:
+        /opt/api/bin/apiserver:
+          content: "\x7fELF (compiled program)\n"
+          mode: "755"
+        /etc/api/api.env:
+          content: |
+            DATABASE_URL=postgres://api:s3cret@10.0.7.12:5432/shop
+            LOG_LEVEL=info
+          mode: "640"
+        /etc/systemd/system/api.service: |
+          [Unit]
+          Description=Shop API
+          After=network.target
+
+          [Service]
+          ExecStart=/opt/api/bin/api-server --listen :3000
+          Restart=on-failure
+
+          [Install]
+          WantedBy=multi-user.target
+      binaries:
+        /opt/api/bin/apiserver:
+          name: apiserver
+          listen: 3000
+          requireEnv: [DATABASE_URL]
+          startLog: ["connected to database 10.0.7.12:5432/shop", "api listening on :{port}"]
+          http:
+            /health: { body: "{\"status\":\"ok\",\"db\":\"up\"}\n" }
+      setup:
+        - sudo systemctl enable --now api
+    hints: []
+    validator:
+      checks:
+        - type: serviceActive
+          unit: api
+          message: "`api.service` should be active (running)."
+        - type: httpResponds
+          url: http://localhost:3000/health
+          contains: '"status":"ok"'
+      guards:
+        - type: fileContains
+          path: /etc/api/api.env
+          text: DATABASE_URL=postgres://api:s3cret@10.0.7.12:5432/shop
+          message: "`/etc/api/api.env` must keep its DATABASE_URL."
+    xp: 150
+    par: 6
+    solution:
+      - sudo sed -i -e 's#/opt/api/bin/api-server#/opt/api/bin/apiserver#' -e 's#^ExecStart=.*#&\nEnvironmentFile=/etc/api/api.env#' /etc/systemd/system/api.service
+      - sudo systemctl daemon-reload
+      - sudo systemctl restart api
+      - curl localhost:3000/health
+    explain: |
+      Two bugs stacked on top of each other:
+      1. **203/EXEC** — `ExecStart` pointed at `api-server`, but the binary is `apiserver`.
+      2. Once that was fixed, the app exited because `DATABASE_URL` wasn't set: the unit never loaded
+         `/etc/api/api.env`. `EnvironmentFile=/etc/api/api.env` fixes it without copying secrets into the unit.
+
+      Fixing one error often reveals the next one — keep reading the journal until it's green.
