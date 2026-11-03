@@ -1,0 +1,430 @@
+id: git-basics
+title: Git fundamentals
+branch: version-control
+prerequisites: [linux-basics]
+sources:
+  - 01-Version-Control/01-Git-Fundamentals
+theory: |
+  Git stores **snapshots**, not diffs. Every file version (blob), directory (tree) and commit is an
+  object named by the **SHA-1 of its content** — which is why the same content is stored once and
+  corruption is detectable. A **branch** is just a file containing a commit id, and **HEAD** points
+  at the branch you're on (`cat .git/HEAD`).
+
+  ```
+  Working directory  ──git add──▶  Staging area (index)  ──git commit──▶  Repository (.git)
+  ```
+
+  The staging area lets you choose what goes into the next commit — e.g. commit the bug fix
+  but not the half-finished notes next to it.
+
+  | Task | Command |
+  |---|---|
+  | Start a repo / see state | `git init`, `git status`, `git log --oneline` |
+  | Stage / commit | `git add FILE`, `git commit -m "msg"` (`-a` stages tracked changes) |
+  | What changed? | `git diff` (unstaged), `git diff --staged` (staged) |
+  | Unstage / discard a change | `git restore --staged FILE` / `git restore FILE` |
+  | Fix the last commit | `git commit --amend` |
+  | Undo commits (local) | `git reset --soft HEAD~1` (keep changes) · `--hard` (discard!) |
+  | Undo on a shared branch | `git revert SHA` (new commit, history kept) |
+  | Find "lost" commits | `git reflog` — every place HEAD has been |
+
+  `.gitignore` lists files Git should never track (secrets, build output, logs).
+missions:
+  - id: first-commit
+    title: Your first repository
+    type: guided
+    prompt: |
+      The marketing site in `~/website` has never been under version control.
+
+      **Turn it into a Git repository and commit both files.** This machine has never used Git,
+      so introduce yourself first (any name and email).
+    initialState:
+      remove: [/home/student/.gitconfig]
+      files:
+        /home/student/website/index.html: "<html>\n  <body><h1>Spring sale</h1></body>\n</html>\n"
+        /home/student/website/style.css: "h1 { color: tomato; }\n"
+    hints:
+      - text: "`git init` inside `~/website` creates the repository (a hidden `.git` directory)."
+        cost: 5
+      - text: "Git refuses to commit without an identity: `git config --global user.name \"Your Name\"` and `git config --global user.email you@example.com`."
+        cost: 5
+      - text: "Stage everything with `git add .`, then `git commit -m \"Initial commit\"`."
+        cost: 10
+    validator:
+      checks:
+        - type: gitRepo
+          path: /home/student/website
+          message: "`~/website` should be a Git repository (git init)."
+        - type: fileContains
+          path: /home/student/.gitconfig
+          regex: "email = \\S+@\\S+"
+          message: Set your email with `git config --global user.email ...`.
+        - type: gitFile
+          path: /home/student/website
+          file: index.html
+          text: Spring sale
+          message: "`index.html` should be committed."
+        - type: gitFile
+          path: /home/student/website
+          file: style.css
+          text: tomato
+          message: "`style.css` should be committed."
+        - type: gitClean
+          path: /home/student/website
+          untracked: false
+          message: "`git status` should say: nothing to commit, working tree clean."
+    xp: 40
+    par: 6
+    solution:
+      - cd website
+      - git init
+      - git config --global user.name "Ada Lovelace"
+      - git config --global user.email ada@example.com
+      - git add .
+      - git commit -m "Initial commit"
+    explain: |
+      `git config --global` writes to `~/.gitconfig`, so every repository on this machine uses that
+      identity. Notice the hint `git init` printed about the branch name: set
+      `git config --global init.defaultBranch main` once and new repos start on `main`.
+
+  - id: split-commits
+    title: Commit only the fix
+    type: guided
+    prompt: |
+      In `~/api` you fixed a real bug in `auth.py` — and also scribbled some ideas into `notes.md`.
+
+      **Commit only the bug fix** (with a message mentioning the fix). The notes must stay
+      uncommitted in your working directory.
+    initialState:
+      files:
+        /home/student/api/auth.py: "def token_valid(t, now):\n    return t.expires_at < now\n"
+        /home/student/api/notes.md: "# API notes\n"
+      cwd: /home/student/api
+      setup:
+        - git init -q
+        - git add .
+        - git commit -qm "Initial API"
+        - "echo -e 'def token_valid(t, now):\\n    return t.expires_at > now' > auth.py"
+        - "echo '- WIP: rate limiting ideas' >> notes.md"
+    hints:
+      - text: "`git status` shows two modified files; `git diff` shows exactly what changed in each."
+        cost: 5
+      - text: "Stage just one file: `git add auth.py`. `git status` now lists it under \"Changes to be committed\"."
+        cost: 5
+      - text: "`git commit -m \"Fix token expiry check\"` commits only what is staged."
+        cost: 10
+    validator:
+      checks:
+        - type: gitFile
+          path: /home/student/api
+          file: auth.py
+          text: expires_at > now
+          message: The fixed `auth.py` should be committed.
+        - type: gitCommit
+          path: /home/student/api
+          tipOnly: true
+          pattern: "[Ff]ix"
+          message: The commit message should mention the fix.
+        - type: not
+          check: { type: gitFile, path: /home/student/api, file: notes.md, text: WIP }
+          message: The WIP notes should not be committed.
+      guards:
+        - type: fileContains
+          path: /home/student/api/notes.md
+          text: WIP
+          message: Keep your notes in the working directory — don't throw them away.
+    xp: 40
+    par: 4
+    solution:
+      - git diff
+      - git add auth.py
+      - git commit -m "Fix token expiry check"
+    explain: |
+      Small, focused commits make history readable and let you revert one change without the other.
+      `git add -p` (interactive, not simulated here) can even stage parts of a file.
+
+  - id: ignore-secrets
+    title: Never commit secrets
+    type: guided
+    prompt: |
+      `git status` in `~/shop-api` is a mess: an `.env` file with credentials, the whole
+      `node_modules/` directory and a log file all show up as untracked.
+
+      **Make Git ignore `.env`, `node_modules/` and every `*.log` file**, then commit the ignore
+      rules together with the new `src/orders.js`. Afterwards `git status` must be completely clean.
+    initialState:
+      files:
+        /home/student/shop-api/src/app.js: "const express = require('express');\n"
+        /home/student/shop-api/src/orders.js: "module.exports = (req, res) => res.json([]);\n"
+        /home/student/shop-api/.env: "STRIPE_SECRET=sk_live_51H8...\nDB_PASSWORD=hunter2\n"
+        /home/student/shop-api/node_modules/express/index.js: "module.exports = {};\n"
+        /home/student/shop-api/server.log: "listening on 3000\n"
+      cwd: /home/student/shop-api
+      setup:
+        - git init -q
+        - git add src/app.js
+        - git commit -qm "Initial app"
+    hints:
+      - text: "Create a `.gitignore` file in the repository root with one pattern per line."
+        cost: 5
+      - text: "Patterns: `.env`, `node_modules/` (a trailing slash means a directory) and `*.log`."
+        cost: 5
+      - text: "`echo -e '.env\\nnode_modules/\\n*.log' > .gitignore`, then `git add .` and commit."
+        cost: 10
+    validator:
+      checks:
+        - type: gitTracked
+          path: /home/student/shop-api
+          file: .env
+          tracked: false
+          message: "`.env` must never be committed."
+        - type: gitTracked
+          path: /home/student/shop-api
+          file: node_modules/express/index.js
+          tracked: false
+          message: "`node_modules/` should not be committed."
+        - type: gitTracked
+          path: /home/student/shop-api
+          file: server.log
+          tracked: false
+          message: Log files should not be committed.
+        - type: gitFile
+          path: /home/student/shop-api
+          file: .gitignore
+          regex: "\\.env"
+          message: "`.gitignore` should be committed."
+        - type: gitFile
+          path: /home/student/shop-api
+          file: src/orders.js
+          text: module.exports
+          message: "`src/orders.js` should be committed."
+        - type: gitClean
+          path: /home/student/shop-api
+          untracked: false
+      guards:
+        - type: fileExists
+          path: /home/student/shop-api/.env
+          message: Don't delete `.env` — the app needs it locally. Ignore it instead.
+    xp: 50
+    par: 4
+    solution:
+      - "echo -e '.env\\nnode_modules/\\n*.log' > .gitignore"
+      - git add .
+      - git commit -m "Ignore secrets, dependencies and logs; add orders endpoint"
+    explain: |
+      `.gitignore` only affects **untracked** files. If a secret was already committed, adding it to
+      `.gitignore` is not enough: `git rm --cached FILE` stops tracking it, and the secret must be
+      rotated, because it's still in the history.
+
+  - id: unstage-key
+    title: Oops, staged the private key
+    type: guided
+    prompt: |
+      You ran `git add .` in `~/payments` and only then noticed that `config/prod.key` — a private
+      key — is staged together with your change to `billing.py`.
+
+      **Unstage the key (keep the file on disk) and commit only the billing change.**
+    initialState:
+      files:
+        /home/student/payments/billing.py: "def total(amount):\n    return amount\n"
+      cwd: /home/student/payments
+      setup:
+        - git init -q
+        - git add .
+        - git commit -qm "Initial billing"
+        - "echo -e 'def total(amount):\\n    return round(amount * 1.21, 2)' > billing.py"
+        - mkdir config
+        - "echo '-----BEGIN PRIVATE KEY-----' > config/prod.key"
+        - git add .
+    hints:
+      - text: "`git status` tells you how: look at the line under \"Changes to be committed\"."
+        cost: 5
+      - text: "`git restore --staged config/prod.key` removes it from the staging area but leaves the file alone."
+        cost: 10
+    validator:
+      checks:
+        - type: gitTracked
+          path: /home/student/payments
+          file: config/prod.key
+          tracked: false
+          message: The private key must not be staged or committed.
+        - type: gitFile
+          path: /home/student/payments
+          file: billing.py
+          text: "1.21"
+          message: The billing change should be committed.
+      guards:
+        - type: fileExists
+          path: /home/student/payments/config/prod.key
+          message: Keep the key file on disk — just don't commit it.
+    xp: 40
+    par: 3
+    solution:
+      - git restore --staged config/prod.key
+      - git commit -m "Apply VAT to invoice totals"
+    explain: |
+      `git restore --staged` moves a file out of the index without touching your working copy.
+      (Older tutorials use `git reset HEAD FILE`, which does the same.) Better still: add `*.key`
+      to `.gitignore` so it can't happen again.
+
+  - id: amend-commit
+    title: Fix the last commit
+    type: free
+    prompt: |
+      Your last commit in `~/blog` has a typo in its message ("Fix lgoin bug") **and** you forgot to
+      include `tests/test_login.py`.
+
+      **Rewrite that commit** so its message is exactly `Fix login bug` and it contains the test —
+      without adding an extra commit. (It hasn't been pushed, so rewriting is fine.)
+    initialState:
+      files:
+        /home/student/blog/app.py: "app = 'blog'\n"
+      cwd: /home/student/blog
+      setup:
+        - git init -q
+        - git add .
+        - git commit -qm "Create blog app"
+        - "echo 'def login(u, p): return u and p' > login.py"
+        - mkdir tests
+        - "echo 'def test_login(): assert login(\"a\", \"b\")' > tests/test_login.py"
+        - git add login.py
+        - git commit -qm "Fix lgoin bug"
+    hints: []
+    validator:
+      checks:
+        - type: gitCommit
+          path: /home/student/blog
+          tipOnly: true
+          pattern: "^Fix login bug\\n?$"
+          message: "The last commit's message should be exactly `Fix login bug`."
+        - type: gitFile
+          path: /home/student/blog
+          file: tests/test_login.py
+          text: test_login
+          message: The test should be part of the commit.
+        - type: gitHistory
+          path: /home/student/blog
+          count: 2
+          message: There should still be exactly 2 commits (amend instead of adding a new one).
+    xp: 60
+    par: 3
+    solution:
+      - git add tests/test_login.py
+      - git commit --amend -m "Fix login bug"
+    explain: |
+      `--amend` replaces the last commit with a new one (new SHA). That's harmless locally, but never
+      amend commits others already pulled — it rewrites shared history.
+
+  - id: git-basics-check
+    title: "Knowledge check: how Git works"
+    type: quiz
+    prompt: The internals and the undo toolbox, as in your notes.
+    xp: 30
+    questions:
+      - kind: single
+        prompt: What is a Git branch, physically?
+        options:
+          - A full copy of the project files
+          - A small file containing the SHA of a commit
+          - A diff against main
+          - A directory inside .git/objects with all its commits
+        answer: 1
+        explain: That's why branches are cheap — `cat .git/refs/heads/main` shows the SHA.
+      - kind: order
+        prompt: Put the path of a change in order.
+        items:
+          - Edit the file in the working directory
+          - "git add: copy it into the staging area (index)"
+          - "git commit: snapshot the index into the repository"
+          - "git push: send the commit to the remote"
+      - kind: single
+        prompt: A bad commit is already on the shared `main` branch. How do you undo it?
+        options:
+          - git reset --hard HEAD~1 and force-push
+          - git revert <sha> — a new commit that undoes it
+          - Delete the branch and recreate it
+          - git commit --amend
+        answer: 1
+        explain: revert keeps history intact for everyone who already pulled. reset rewrites it.
+      - kind: multi
+        prompt: Which commands change what HEAD points at?
+        options:
+          - git commit
+          - git switch feature
+          - git status
+          - git reset --hard HEAD~1
+          - git diff
+        answers: [0, 1, 3]
+      - kind: text
+        prompt: Which command shows every commit HEAD has pointed at — your safety net after a bad reset?
+        accept: ["git reflog", reflog]
+      - kind: single
+        prompt: What happens when you run `git commit`?
+        options:
+          - Git stores a diff of every changed line
+          - Git builds a tree from the index, creates a commit pointing to it and its parent, and moves the branch
+          - Git uploads the changes to the remote
+          - Git copies the whole working directory into a new folder
+        answer: 1
+
+  - id: boss-lost-work
+    title: "Boss: three days of work, gone"
+    type: boss
+    prompt: |
+      🚨 Your colleague wanted to "clean up" `~/payments-svc` and ran `git reset --hard HEAD~3` on
+      `main`. Three commits of the payment feature (Stripe client, refunds, webhooks) vanished —
+      they were never pushed. Then they committed a README update on top.
+
+      **Get all three lost commits back into `main` without losing the README update.**
+    initialState:
+      files:
+        /home/student/payments-svc/README.md: "# Payments service\n"
+      cwd: /home/student/payments-svc
+      setup:
+        - git init -q
+        - git add .
+        - git commit -qm "Initial service"
+        - "echo 'class Stripe: pass' > stripe_client.py"
+        - git add . && git commit -qm "Add Stripe client"
+        - "echo 'def refund(id): pass' > refunds.py"
+        - git add . && git commit -qm "Add refund endpoint"
+        - "echo 'def on_event(e): pass' > webhooks.py"
+        - git add . && git commit -qm "Add webhook handler"
+        - git reset -q --hard HEAD~3
+        - "echo 'Run with: make dev' >> README.md"
+        - git commit -qam "Update README"
+    hints: []
+    validator:
+      checks:
+        - type: gitCommit
+          path: /home/student/payments-svc
+          ref: main
+          pattern: "^Add Stripe client"
+        - type: gitCommit
+          path: /home/student/payments-svc
+          ref: main
+          pattern: "^Add webhook handler"
+        - type: gitFile
+          path: /home/student/payments-svc
+          ref: main
+          file: webhooks.py
+          text: on_event
+        - type: gitFile
+          path: /home/student/payments-svc
+          ref: main
+          file: README.md
+          text: make dev
+          message: The README update must survive.
+        - type: gitClean
+          path: /home/student/payments-svc
+    xp: 150
+    par: 5
+    solution:
+      - git reflog
+      - git branch rescue HEAD@{2}
+      - git merge rescue
+    explain: |
+      Commits are almost never really lost: `git reflog` remembers every position of HEAD. The tip of
+      the lost work was `HEAD@{2}`. Resetting to it would have dropped the README commit, so instead
+      you gave it a branch name and merged it (cherry-picking the three commits works too).
+      Unreachable commits are only garbage-collected after ~30 days.

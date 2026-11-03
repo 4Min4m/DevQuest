@@ -1,4 +1,5 @@
 import { createShell } from '../sim';
+import { newRepo } from '../sim/git';
 import { identityOf } from '../sim/shell/identity';
 import { createInitialState, Process, refreshProc, SimState } from '../sim/state';
 import { dirname, isWithin, normalize, splitPath } from '../sim/vfs/path';
@@ -100,6 +101,11 @@ export function buildInitialState(spec: InitialStateSpec = {}): SimState {
 
   Object.assign(state.network, spec.network ?? {});
 
+  for (const h of spec.gitHosted ?? []) {
+    const remote = newRepo(h.url, h.branch ?? 'main', true);
+    (state.git ??= { repos: {}, remotes: {} }).remotes[h.url] = remote;
+  }
+
   if (spec.binaries && state.systemd) Object.assign(state.systemd.binaries, spec.binaries);
   if (spec.dns && state.net) state.net.records.push(...spec.dns);
   if (spec.remotes && state.net) state.net.remotes.push(...spec.remotes);
@@ -130,6 +136,12 @@ export function buildInitialState(spec: InitialStateSpec = {}): SimState {
     state.cwd = spec.cwd ? normalize(spec.cwd) : state.vars.HOME;
     state.vars.PWD = state.cwd;
     delete state.oldCwd;
+  }
+
+  // Branch protection applies after setup, so setup itself can seed the protected branches.
+  for (const h of spec.gitHosted ?? []) {
+    const remote = state.git?.remotes[h.url];
+    if (remote && h.protected) remote.protectedBranches = [...h.protected];
   }
 
   // Sanity check: the learner must be able to stand in the starting directory.

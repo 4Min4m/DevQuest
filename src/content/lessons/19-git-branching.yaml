@@ -1,0 +1,419 @@
+id: git-branching
+title: Branching & merging
+branch: git-branching
+prerequisites: [git-basics]
+sources:
+  - 01-Version-Control/02-Branching-Strategies
+  - 01-Version-Control/03-Merge-vs-Rebase
+theory: |
+  A branch is a movable pointer, so creating one is instant: `git switch -c feature/x`.
+  Bringing work back together:
+
+  | | Merge | Rebase | Squash merge |
+  |---|---|---|---|
+  | What it does | new merge commit with two parents | replays your commits on top of the other branch (new SHAs) | one commit with all the branch's changes |
+  | History | complete, but noisy | clean and linear | one commit per feature |
+  | Safe on shared branches | ✅ | ❌ never rebase pushed/shared commits | ✅ |
+  | Conflicts | resolved once | resolved per commit | resolved once |
+
+  If the target branch hasn't moved, `git merge` simply **fast-forwards** the pointer — no merge commit.
+
+  **Conflicts** happen when both sides changed the same lines. Git writes both versions into the file:
+
+  ```
+  <<<<<<< HEAD
+  your version
+  =======
+  their version
+  >>>>>>> feature
+  ```
+
+  Edit the file to the correct result, `git add` it, then `git commit` (merge) or
+  `git rebase --continue` (rebase). `git merge --abort` / `git rebase --abort` gets you out.
+
+  `git cherry-pick SHA` copies one commit onto the current branch — the classic way to bring a
+  hotfix to a release branch.
+missions:
+  - id: feature-branch
+    title: Work on a branch
+    type: guided
+    prompt: |
+      Add a search module to `~/shop` the proper way:
+
+      1. create a branch `feature/search`
+      2. commit a new file `search.py` on it
+      3. merge it into `main`
+      4. delete the branch once it's merged
+    initialState:
+      files:
+        /home/student/shop/app.py: "print('shop')\n"
+      cwd: /home/student/shop
+      setup:
+        - git init -q
+        - git add .
+        - git commit -qm "Initial shop"
+    hints:
+      - text: "`git switch -c feature/search` creates the branch and switches to it."
+        cost: 5
+      - text: "Create the file (e.g. `echo 'def search(q): return []' > search.py`), then `git add` and `git commit`."
+        cost: 5
+      - text: "`git switch main`, `git merge feature/search`, then `git branch -d feature/search`."
+        cost: 10
+    validator:
+      checks:
+        - type: gitFile
+          path: /home/student/shop
+          ref: main
+          file: search.py
+          regex: "."
+          message: "`search.py` should be committed and merged into `main`."
+        - type: gitBranch
+          path: /home/student/shop
+          name: feature/search
+          exists: false
+          message: Delete the merged branch.
+        - type: gitHead
+          path: /home/student/shop
+          branch: main
+        - type: commandUsed
+          command: git
+          argsInclude: [switch]
+          message: Do the work on a branch (git switch -c ...), not directly on main.
+      guards:
+        - type: gitRepo
+          path: /home/student/shop
+          message: Don't delete the repository!
+    xp: 40
+    par: 8
+    solution:
+      - git switch -c feature/search
+      - "echo 'def search(q): return []' > search.py"
+      - git add search.py
+      - git commit -m "Add search module"
+      - git switch main
+      - git merge feature/search
+      - git branch -d feature/search
+    explain: |
+      `main` hadn't moved since you branched, so the merge was a **fast-forward**: Git just moved the
+      `main` pointer forward. `git branch -d` only deletes branches that are fully merged — `-D`
+      forces it.
+
+  - id: resolve-conflict
+    title: Your first merge conflict
+    type: guided
+    prompt: |
+      In `~/infra`, `main` raised `retries` to 5 while the branch `feature/timeouts` raised `timeout`
+      to 30. Both edited `config.yaml`.
+
+      **Merge `feature/timeouts` into `main`** and resolve the conflict so the result keeps
+      **both** changes:
+
+      ```yaml
+      timeout: 30
+      retries: 5
+      ```
+    initialState:
+      files:
+        /home/student/infra/config.yaml: "timeout: 10\nretries: 3\n"
+      cwd: /home/student/infra
+      setup:
+        - git init -q
+        - git add .
+        - git commit -qm "Add config"
+        - git switch -qc feature/timeouts
+        - "echo -e 'timeout: 30\\nretries: 3' > config.yaml"
+        - git commit -qam "Raise timeout to 30s"
+        - git switch -q main
+        - "echo -e 'timeout: 10\\nretries: 5' > config.yaml"
+        - git commit -qam "Retry up to 5 times"
+    hints:
+      - text: "`git merge feature/timeouts` stops with a CONFLICT. `cat config.yaml` shows both versions between the markers."
+        cost: 5
+      - text: "Rewrite the file to the final content (`nano config.yaml`, delete the markers), then `git add config.yaml`."
+        cost: 5
+      - text: "`git commit` (or `git commit --no-edit`) concludes the merge."
+        cost: 10
+    validator:
+      checks:
+        - type: gitFile
+          path: /home/student/infra
+          ref: main
+          file: config.yaml
+          regex: "^timeout: 30\\nretries: 5\\n$"
+          message: "`config.yaml` on main should contain exactly `timeout: 30` and `retries: 5`."
+        - type: gitHistory
+          path: /home/student/infra
+          ref: main
+          minMerges: 1
+          message: "`main` should have a merge commit."
+        - type: gitClean
+          path: /home/student/infra
+          message: The merge should be concluded (git status clean, no conflict left).
+    xp: 60
+    par: 5
+    solution:
+      - git merge feature/timeouts || true
+      - "echo -e 'timeout: 30\\nretries: 5' > config.yaml"
+      - git add config.yaml
+      - git commit --no-edit
+    explain: |
+      Git can't know which version is right when both sides changed the same (or adjacent) lines, so it
+      asks you. `git status` lists conflicted files under "Unmerged paths"; `git add` marks them resolved.
+      `git checkout --ours FILE` / `--theirs FILE` pick one side wholesale when that's what you want.
+
+  - id: rebase-feature
+    title: A linear history with rebase
+    type: guided
+    prompt: |
+      In `~/webapp`, `feature/api` was branched a while ago and `main` has moved on since.
+      The team wants a **linear history** — no merge commits.
+
+      **Rebase `feature/api` onto `main`, then fast-forward `main` to include it.**
+    initialState:
+      files:
+        /home/student/webapp/README.md: "# webapp\n"
+      cwd: /home/student/webapp
+      setup:
+        - git init -q
+        - git add .
+        - git commit -qm "Initial commit"
+        - git switch -qc feature/api
+        - "echo 'def users(): return []' > api.py"
+        - git add . && git commit -qm "Add users API"
+        - "echo 'def test_users(): pass' > test_api.py"
+        - git add . && git commit -qm "Test users API"
+        - git switch -q main
+        - "echo 'Deploy with make deploy' > DEPLOY.md"
+        - git add . && git commit -qm "Document deployment"
+        - "echo 'MIT' > LICENSE"
+        - git add . && git commit -qm "Add license"
+    hints:
+      - text: "`git log --oneline --graph --all` shows the two diverging lines."
+        cost: 5
+      - text: "On the feature branch: `git switch feature/api`, then `git rebase main`."
+        cost: 5
+      - text: "Back on main, `git merge feature/api` is now a fast-forward."
+        cost: 10
+    validator:
+      checks:
+        - type: gitCommit
+          path: /home/student/webapp
+          ref: main
+          pattern: "^Test users API"
+          message: "`main` should include the feature commits."
+        - type: gitHistory
+          path: /home/student/webapp
+          ref: main
+          linear: true
+          message: "`main` should have no merge commits (linear history)."
+        - type: gitFile
+          path: /home/student/webapp
+          ref: main
+          file: LICENSE
+          text: MIT
+        - type: gitClean
+          path: /home/student/webapp
+    xp: 60
+    par: 5
+    solution:
+      - git switch feature/api
+      - git rebase main
+      - git switch main
+      - git merge feature/api
+    explain: |
+      Rebase replayed your two commits on top of the new `main`, giving them **new SHAs**. That's why
+      you only rebase branches nobody else has pulled — for everyone else those commits would
+      suddenly look different.
+
+  - id: cherry-pick-hotfix
+    title: Hotfix for the release branch
+    type: guided
+    prompt: |
+      Version 1.2 of `~/forum` is maintained on the branch `release/1.2`. Meanwhile `main` got new
+      features **and** a security fix: "Fix XSS in comments".
+
+      **Bring only the XSS fix to `release/1.2`** — none of the new features.
+    initialState:
+      files:
+        /home/student/forum/comments.py: "def render(text):\n    return text\n"
+      cwd: /home/student/forum
+      setup:
+        - git init -q
+        - git add .
+        - git commit -qm "Comments v1"
+        - git branch release/1.2
+        - "echo 'def react(emoji): pass' > reactions.py"
+        - git add . && git commit -qm "Add reactions feature"
+        - "echo -e 'import html\\ndef render(text):\\n    return html.escape(text)' > comments.py"
+        - git commit -qam "Fix XSS in comments"
+        - "echo 'body { background: #111 }' > theme.css"
+        - git add . && git commit -qm "Add dark mode"
+    hints:
+      - text: "`git log --oneline main` shows the commit you want and its short SHA."
+        cost: 5
+      - text: "Switch to `release/1.2`, then `git cherry-pick <sha>`."
+        cost: 10
+    validator:
+      checks:
+        - type: gitFile
+          path: /home/student/forum
+          ref: release/1.2
+          file: comments.py
+          text: html.escape
+          message: The XSS fix should be on release/1.2.
+        - type: gitFile
+          path: /home/student/forum
+          ref: release/1.2
+          file: reactions.py
+          absent: true
+          message: The reactions feature must NOT reach the release branch.
+        - type: gitFile
+          path: /home/student/forum
+          ref: release/1.2
+          file: theme.css
+          absent: true
+          message: Dark mode must NOT reach the release branch.
+        - type: gitCommit
+          path: /home/student/forum
+          ref: release/1.2
+          pattern: "XSS"
+    xp: 50
+    par: 4
+    solution:
+      - git log --oneline main
+      - git switch release/1.2
+      - git cherry-pick main~1
+    explain: |
+      `cherry-pick` re-applies one commit's changes as a new commit (new SHA, same message and
+      author). Merging `main` would have dragged every feature along with the fix.
+
+  - id: git-branching-check
+    title: "Knowledge check: strategies"
+    type: quiz
+    prompt: Merge vs rebase vs squash, and which branching model fits which team.
+    xp: 30
+    questions:
+      - kind: single
+        prompt: What's the golden rule of rebasing?
+        options:
+          - Always rebase before merging into main
+          - Never rebase commits that have been pushed to a shared branch
+          - Only rebase when there are conflicts
+          - Rebase only on main
+        answer: 1
+        explain: Rebasing creates new SHAs; teammates who pulled the old ones end up with diverged histories.
+      - kind: single
+        prompt: Which strategy gives `main` exactly one commit per feature?
+        options:
+          - Merge commit
+          - Rebase and fast-forward
+          - Squash merge
+          - Cherry-pick
+        answer: 2
+      - kind: single
+        prompt: "A mobile app ships versioned releases and supports several versions in production. Which model fits best?"
+        options:
+          - Git Flow (develop, release/*, hotfix/* branches)
+          - Trunk-based development
+          - GitHub Flow
+          - No branches at all
+        answer: 0
+        explain: Git Flow suits scheduled, versioned releases. Trunk-based/GitHub Flow suit continuous deployment.
+      - kind: multi
+        prompt: Which are true about trunk-based development?
+        options:
+          - Branches live hours or days, not weeks
+          - Feature flags hide unfinished work in production
+          - It needs a develop and a release branch
+          - CI runs on every commit
+        answers: [0, 1, 3]
+      - kind: single
+        prompt: "`git merge feature` printed \"Fast-forward\". What happened?"
+        options:
+          - Git created a merge commit with two parents
+          - main had no new commits, so Git just moved the main pointer to feature's tip
+          - Git rebased feature
+          - The merge was skipped
+        answer: 1
+      - kind: text
+        prompt: Which command gets you out of a merge that stopped with conflicts, back to where you started?
+        accept: ["git merge --abort", "/^git\\s+merge\\s+--abort$/"]
+
+  - id: boss-release-merge
+    title: "Boss: release day merge"
+    type: boss
+    prompt: |
+      🚀 It's release day for `~/storefront`. Merge `release/2.4` into `main` — and it conflicts in
+      two files. The release manager's requirements:
+
+      - `version.py`: the release version, `VERSION = '2.4.0'`
+      - `settings.py`: `DEBUG = False` (from the release) **and**
+        `FEATURE_FLAGS = ['new-checkout']` (from main)
+
+      Use a real merge (keep the release history), and leave the repo clean.
+    initialState:
+      files:
+        /home/student/storefront/version.py: "VERSION = '2.3.0'\n"
+        /home/student/storefront/settings.py: "DEBUG = True\nFEATURE_FLAGS = []\n"
+        /home/student/storefront/README.md: "# Storefront\n"
+      cwd: /home/student/storefront
+      setup:
+        - git init -q
+        - git add .
+        - git commit -qm "Storefront 2.3.0"
+        - git switch -qc release/2.4
+        - "echo \"VERSION = '2.4.0'\" > version.py"
+        - git commit -qam "Bump version to 2.4.0"
+        - "echo -e \"DEBUG = False\\nFEATURE_FLAGS = []\" > settings.py"
+        - git commit -qam "Disable debug for release"
+        - git switch -q main
+        - "echo \"VERSION = '2.3.1'\" > version.py"
+        - git commit -qam "Hotfix 2.3.1"
+        - "echo -e \"DEBUG = True\\nFEATURE_FLAGS = ['new-checkout']\" > settings.py"
+        - git commit -qam "Flag the new checkout"
+        - "echo 'Support: help@storefront.test' >> README.md"
+        - git commit -qam "Add support contact"
+    hints: []
+    validator:
+      checks:
+        - type: gitFile
+          path: /home/student/storefront
+          ref: main
+          file: version.py
+          regex: "^VERSION = '2\\.4\\.0'\\n$"
+        - type: gitFile
+          path: /home/student/storefront
+          ref: main
+          file: settings.py
+          regex: "^DEBUG = False\\nFEATURE_FLAGS = \\['new-checkout'\\]\\n$"
+          message: "settings.py should have DEBUG = False and FEATURE_FLAGS = ['new-checkout'] (and nothing else)."
+        - type: gitFile
+          path: /home/student/storefront
+          ref: main
+          file: README.md
+          text: Support
+          message: Main's README change must survive.
+        - type: gitHistory
+          path: /home/student/storefront
+          ref: main
+          minMerges: 1
+          message: Use a real merge (a merge commit on main).
+        - type: gitCommit
+          path: /home/student/storefront
+          ref: main
+          pattern: "^Disable debug for release"
+        - type: gitClean
+          path: /home/student/storefront
+          untracked: false
+    xp: 150
+    par: 7
+    solution:
+      - git merge release/2.4 || true
+      - "echo \"VERSION = '2.4.0'\" > version.py"
+      - "echo -e \"DEBUG = False\\nFEATURE_FLAGS = ['new-checkout']\" > settings.py"
+      - git add version.py settings.py
+      - git commit --no-edit
+    explain: |
+      Two files, two different resolutions: in `version.py` one side wins; in `settings.py` you
+      combined both. Before committing, `git diff --staged` is a good last look. Long-lived release
+      branches are exactly why Git Flow is conflict-prone — the longer branches live, the bigger the merge.

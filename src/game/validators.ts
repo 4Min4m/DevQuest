@@ -9,6 +9,7 @@ import { normalize } from '../sim/vfs/path';
 import type { FsNode } from '../sim/vfs/types';
 import { Vfs } from '../sim/vfs/vfs';
 import type { Check, Validator } from './types';
+import { describeGit, evaluateGit, GIT_CHECK_TYPES, GitCheck } from './gitChecks';
 
 /** What a validator can look at: the final machine plus what the learner saw. */
 export interface ValidationContext {
@@ -105,6 +106,8 @@ export function describe(check: Check): string {
       return `the filesystem holding \`${check.mount}\` should be under ${check.percent}% full`;
     case 'inodeUsageBelow':
       return `the filesystem holding \`${check.mount}\` should use under ${check.percent}% of its inodes`;
+    default:
+      return describeGit(check as GitCheck);
   }
 }
 
@@ -266,6 +269,8 @@ function evaluate(check: Check, ctx: ValidationContext): boolean {
       const pct = check.type === 'diskUsageBelow' ? (u.usedKb / (u.usedKb + u.availKb)) * 100 : (u.inodesUsed / u.inodes) * 100;
       return pct < check.percent;
     }
+    default:
+      return evaluateGit(check as GitCheck, state);
   }
 }
 
@@ -288,5 +293,5 @@ export const CHECK_TYPES: readonly Check['type'][] = [
   'processRunning', 'processAbsent', 'commandUsed', 'outputContains', 'anyOf', 'not',
   'containerRunning', 'containerAbsent', 'containerPort', 'containerEnv', 'containerMount', 'containerNetwork',
   'containerInspect', 'containerFile', 'imageExists', 'imageInspect', 'volumeExists', 'networkExists', 'httpResponds',
-  'serviceActive', 'serviceEnabled', 'diskUsageBelow', 'inodeUsageBelow',
+  'serviceActive', 'serviceEnabled', 'diskUsageBelow', 'inodeUsageBelow', ...GIT_CHECK_TYPES,
 ];

@@ -1,0 +1,405 @@
+id: git-remotes
+title: Remotes & teamwork
+branch: git-remotes
+prerequisites: [git-branching]
+sources:
+  - 01-Version-Control/01-Git-Fundamentals
+  - 01-Version-Control/02-Branching-Strategies
+  - 01-Version-Control/04-GitOps
+theory: |
+  A **remote** is another copy of the repository — usually on GitHub or GitLab — called `origin`
+  when you clone. Your repo keeps **remote-tracking branches** like `origin/main`: what the remote
+  looked like the last time you talked to it.
+
+  | Command | What it does |
+  |---|---|
+  | `git clone URL` | copy a repo, set up `origin`, check out its default branch |
+  | `git fetch` | download new commits, update `origin/*` — your branches don't move |
+  | `git pull` | fetch **+** integrate: merge, or rebase with `git pull --rebase` |
+  | `git push -u origin BRANCH` | publish a branch and remember it as upstream |
+  | `git stash` / `git stash pop` | shelve uncommitted work, bring it back later |
+  | `git revert SHA` | undo a pushed commit safely (new commit, history kept) |
+
+  A push is **rejected** when the remote has commits you don't have: pull first, then push.
+  Never "fix" that with `git push --force` on a shared branch — it deletes your teammates' work.
+  If you really must rewrite your own branch, use `--force-with-lease`, which refuses when someone
+  else pushed in the meantime.
+
+  Most teams **protect `main`**: nobody pushes to it directly; changes arrive through pull requests
+  that CI and reviewers check first. In **GitOps** the same idea runs your infrastructure: Git is the
+  single source of truth, and an agent like Argo CD *pulls* the desired state from it.
+missions:
+  - id: clone-and-push
+    title: Clone, branch, push
+    type: guided
+    prompt: |
+      Your team's code lives at `https://github.com/acme/shop.git`. `main` is protected — changes go
+      through pull requests.
+
+      **Clone the repository into `~/shop`, add a file `banner.html` on a new branch
+      `feature/banner`, and push that branch** so you can open a pull request.
+    initialState:
+      gitHosted:
+        - url: https://github.com/acme/shop.git
+          protected: [main]
+      setup:
+        - git clone -q https://github.com/acme/shop.git /tmp/seed
+        - cd /tmp/seed
+        - "echo '<h1>Acme Shop</h1>' > index.html"
+        - git add . && git commit -qm "Initial shop"
+        - git push -q origin main
+        - cd ~
+        - rm -rf /tmp/seed
+    hints:
+      - text: "`git clone https://github.com/acme/shop.git` creates `~/shop`; then `cd shop`."
+        cost: 5
+      - text: "`git switch -c feature/banner`, create the file, `git add`, `git commit`."
+        cost: 5
+      - text: "The first push of a new branch: `git push -u origin feature/banner`."
+        cost: 10
+    validator:
+      checks:
+        - type: gitRepo
+          path: /home/student/shop
+          message: Clone the repository into ~/shop.
+        - type: gitRemote
+          url: https://github.com/acme/shop.git
+          branch: feature/banner
+          file: banner.html
+          regex: "."
+          message: "The remote should have a branch `feature/banner` with `banner.html`."
+    xp: 50
+    par: 8
+    solution:
+      - git clone https://github.com/acme/shop.git
+      - cd shop
+      - git switch -c feature/banner
+      - "echo '<div class=\"banner\">Spring sale!</div>' > banner.html"
+      - git add banner.html
+      - git commit -m "Add spring sale banner"
+      - git push -u origin feature/banner
+    explain: |
+      `-u` (`--set-upstream`) links your local branch to `origin/feature/banner`, so later a plain
+      `git push` / `git pull` knows where to go, and `git status` shows ahead/behind. Try
+      `git push origin main` sometime: the protected branch refuses it, just like GitHub would.
+
+  - id: push-rejected
+    title: Rejected!
+    type: guided
+    prompt: |
+      You committed "Add product sorting" in `~/catalog`. When you push, Git refuses: Alice pushed to
+      `main` in the meantime.
+
+      **Get your commit onto the remote `main` without losing Alice's work, keeping the history
+      linear (no merge commit).**
+    initialState:
+      gitHosted:
+        - url: https://github.com/acme/catalog.git
+      setup:
+        - git clone -q https://github.com/acme/catalog.git /tmp/seed
+        - cd /tmp/seed
+        - "echo '<ul id=\"products\"></ul>' > index.html"
+        - git add . && git commit -qm "Initial catalog"
+        - git push -q origin main
+        - cd ~ && rm -rf /tmp/seed
+        - git clone -q https://github.com/acme/catalog.git
+        - git clone -q https://github.com/acme/catalog.git /tmp/alice
+        - cd /tmp/alice
+        - "echo '<input type=\"search\">' > search.html"
+        - git add . && git -c user.name=Alice -c user.email=alice@acme.test commit -qm "Add search box"
+        - git push -q
+        - cd ~/catalog && rm -rf /tmp/alice
+        - "echo 'function sortBy(k) {}' > sort.js"
+        - git add . && git commit -qm "Add product sorting"
+      cwd: /home/student/catalog
+    hints:
+      - text: "Try `git push` to see the rejection. The hint tells you to integrate the remote changes first."
+        cost: 5
+      - text: "`git pull --rebase` fetches Alice's commit and replays yours on top of it — no merge commit."
+        cost: 10
+    validator:
+      checks:
+        - type: gitRemote
+          url: https://github.com/acme/catalog.git
+          pattern: "^Add product sorting"
+          message: Your commit should be on the remote main.
+        - type: gitRemote
+          url: https://github.com/acme/catalog.git
+          pattern: "^Add search box"
+          message: Alice's commit must still be on main (no force push!).
+        - type: gitRemote
+          url: https://github.com/acme/catalog.git
+          linear: true
+          message: The remote history should be linear (use rebase, not a merge commit).
+        - type: gitClean
+          path: /home/student/catalog
+    xp: 60
+    par: 4
+    solution:
+      - git pull --rebase
+      - git push
+    explain: |
+      `git pull --rebase` = `git fetch` + `git rebase origin/main`. Rebasing your **own unpushed**
+      commits is fine — they weren't shared yet. A plain `git pull` would have asked you how to
+      reconcile divergent branches (or created a merge commit).
+
+  - id: stash-hotfix
+    title: Drop everything, fix main
+    type: guided
+    prompt: |
+      You're halfway through the checkout docs on `feature/checkout` in `~/docs-site` (uncommitted
+      changes in `checkout.md`) when someone reports a typo on the live site: the README on `main`
+      says "Shpo".
+
+      **Fix the typo on `main` and push it, then go back to `feature/checkout` with your unfinished
+      work restored** — without committing the half-done work anywhere.
+    initialState:
+      gitHosted:
+        - url: https://github.com/acme/docs-site.git
+      setup:
+        - git clone -q https://github.com/acme/docs-site.git /tmp/seed
+        - cd /tmp/seed
+        - "echo 'Welcome to the Shpo docs' > README.md"
+        - "echo '## Checkout' > checkout.md"
+        - git add . && git commit -qm "Initial docs"
+        - git push -q origin main
+        - cd ~ && rm -rf /tmp/seed
+        - git clone -q https://github.com/acme/docs-site.git
+        - cd docs-site
+        - git switch -qc feature/checkout
+        - "echo 'Step 1: add items to the cart' >> checkout.md"
+        - git commit -qam "Document step 1"
+        - "echo 'Step 2: WIP payment options...' >> checkout.md"
+      cwd: /home/student/docs-site
+    hints:
+      - text: "Try `git switch main`: Git refuses because your uncommitted change would be overwritten."
+        cost: 5
+      - text: "`git stash` shelves the change; `git stash pop` brings it back later."
+        cost: 5
+      - text: "On main: fix the file (`sed -i 's/Shpo/Shop/' README.md`), `git commit -am ...`, `git push`. Then switch back and `git stash pop`."
+        cost: 10
+    validator:
+      checks:
+        - type: gitRemote
+          url: https://github.com/acme/docs-site.git
+          file: README.md
+          text: Welcome to the Shop
+          message: The typo fix should be pushed to main.
+        - type: not
+          check: { type: gitRemote, url: https://github.com/acme/docs-site.git, file: checkout.md, text: WIP }
+          message: The unfinished work must not end up on main.
+        - type: gitHead
+          path: /home/student/docs-site
+          branch: feature/checkout
+          message: Go back to feature/checkout when you're done.
+        - type: fileContains
+          path: /home/student/docs-site/checkout.md
+          text: "Step 2: WIP"
+          message: Your unfinished work should be back in checkout.md.
+        - type: gitStash
+          path: /home/student/docs-site
+          count: 0
+          message: Pop the stash (don't leave it behind).
+    xp: 60
+    par: 8
+    solution:
+      - git stash
+      - git switch main
+      - sed -i 's/Shpo/Shop/' README.md
+      - git commit -am "Fix typo in README"
+      - git push
+      - git switch feature/checkout
+      - git stash pop
+    explain: |
+      `git stash` saves your uncommitted changes and resets the working tree, so you can switch
+      branches safely. `pop` re-applies them and drops the stash entry (`apply` keeps it). Use
+      `git stash list` to see what's shelved — forgotten stashes are a classic source of "lost" work.
+
+  - id: revert-shared
+    title: Undo a pushed commit
+    type: guided
+    prompt: |
+      Yesterday someone pushed "Enable experimental cache" to `main` of
+      `https://github.com/acme/pricing.git` and prices went wrong in production. Since then, another
+      commit landed on top, and everyone has already pulled.
+
+      **Undo that commit safely and push the fix.** Don't rewrite history. Your clone is `~/pricing`.
+    initialState:
+      gitHosted:
+        - url: https://github.com/acme/pricing.git
+      setup:
+        - git clone -q https://github.com/acme/pricing.git /tmp/seed
+        - cd /tmp/seed
+        - "echo 'cache: off' > config.yaml"
+        - git add . && git commit -qm "Initial pricing config"
+        - "echo 'cache: experimental' > config.yaml"
+        - git commit -qam "Enable experimental cache"
+        - "echo 'EUR' > currencies.txt"
+        - git add . && git commit -qm "Add EUR currency"
+        - git push -q origin main
+        - cd ~ && rm -rf /tmp/seed
+        - git clone -q https://github.com/acme/pricing.git
+      cwd: /home/student/pricing
+    hints:
+      - text: "`git log --oneline` shows the bad commit and its SHA."
+        cost: 5
+      - text: "`git revert <sha>` creates a new commit that undoes it. (`HEAD~1` also names it here.)"
+        cost: 5
+      - text: "Then `git push` — a normal push, no force needed."
+        cost: 10
+    validator:
+      checks:
+        - type: gitRemote
+          url: https://github.com/acme/pricing.git
+          pattern: "^Revert \"Enable experimental cache\""
+          message: Push a revert commit.
+        - type: gitRemote
+          url: https://github.com/acme/pricing.git
+          pattern: "^Enable experimental cache"
+          message: The original commit must stay in history (don't rewrite shared history).
+        - type: gitRemote
+          url: https://github.com/acme/pricing.git
+          file: config.yaml
+          text: "cache: off"
+        - type: gitRemote
+          url: https://github.com/acme/pricing.git
+          file: currencies.txt
+          text: EUR
+          message: The later "Add EUR currency" commit must be kept.
+    xp: 60
+    par: 4
+    solution:
+      - git log --oneline
+      - git revert --no-edit HEAD~1
+      - git push
+    explain: |
+      `git revert` adds a commit that applies the inverse change, so nobody's history breaks. In
+      GitOps this is *the* rollback: revert the commit in the config repo and Argo CD syncs the
+      cluster back to the previous state.
+
+  - id: git-remotes-check
+    title: "Knowledge check: remotes & GitOps"
+    type: quiz
+    prompt: Collaboration commands and the GitOps model from your notes.
+    xp: 30
+    questions:
+      - kind: single
+        prompt: What's the difference between `git fetch` and `git pull`?
+        options:
+          - They are the same
+          - fetch downloads new commits and updates origin/*, pull also integrates them into your branch
+          - fetch uploads, pull downloads
+          - pull only works with rebase
+        answer: 1
+      - kind: single
+        prompt: Your push was rejected (fetch first). Which response is WRONG on a shared branch?
+        options:
+          - git pull --rebase, then git push
+          - git pull (merge), then git push
+          - git push --force
+          - git fetch, inspect origin/main, then integrate and push
+        answer: 2
+        explain: A force push throws away the commits your teammates pushed.
+      - kind: single
+        prompt: What does `--force-with-lease` add over `--force`?
+        options:
+          - It's faster
+          - It refuses if the remote branch moved since you last fetched it
+          - It only works on protected branches
+          - It also pushes tags
+        answer: 1
+      - kind: multi
+        prompt: Which are GitOps principles?
+        options:
+          - The system is described declaratively
+          - The desired state is versioned in Git as the source of truth
+          - CI pipelines run kubectl apply with cluster credentials
+          - Agents pull and continuously reconcile the actual state
+        answers: [0, 1, 3]
+        explain: Pushing from CI with cluster credentials is the traditional push model GitOps replaces.
+      - kind: single
+        prompt: In a GitOps setup, production breaks after a config change. What's the cleanest rollback?
+        options:
+          - kubectl edit the deployment by hand
+          - git revert the commit in the config repo and let the agent sync
+          - Delete the namespace
+          - Force-push an older commit to main
+        answer: 1
+      - kind: text
+        prompt: Which command shelves your uncommitted changes so you can switch branches?
+        accept: ["git stash", "git stash push", stash]
+
+  - id: boss-friday-deploy
+    title: "Boss: Friday afternoon hotfix"
+    type: boss
+    prompt: |
+      🔥 Prices on the checkout page show 9.990000001. You already committed the rounding fix in
+      `~/checkout`, but your push is rejected — Alice pushed "Support discounts", which changed the
+      **same line**.
+
+      Ship it:
+      - `prices.py` on the remote `main` must end up as exactly
+        ```python
+        def price(cents, discount=0):
+            return round(cents / 100 * (1 - discount), 2)
+        ```
+      - keep Alice's commit and yours in the history (no force push)
+      - tag the released commit `v1.4.1` (annotated) and push the tag
+    initialState:
+      gitHosted:
+        - url: https://github.com/acme/checkout.git
+      setup:
+        - git clone -q https://github.com/acme/checkout.git /tmp/seed
+        - cd /tmp/seed
+        - "echo -e 'def price(cents):\\n    return cents / 100' > prices.py"
+        - git add . && git commit -qm "Price helper"
+        - git push -q origin main
+        - cd ~ && rm -rf /tmp/seed
+        - git clone -q https://github.com/acme/checkout.git
+        - git clone -q https://github.com/acme/checkout.git /tmp/alice
+        - cd /tmp/alice
+        - "echo -e 'def price(cents, discount=0):\\n    return cents / 100 * (1 - discount)' > prices.py"
+        - git -c user.name=Alice -c user.email=alice@acme.test commit -qam "Support discounts"
+        - git push -q
+        - cd ~/checkout && rm -rf /tmp/alice
+        - "echo -e 'def price(cents):\\n    return round(cents / 100, 2)' > prices.py"
+        - git commit -qam "Round prices to 2 decimals"
+      cwd: /home/student/checkout
+    hints: []
+    validator:
+      checks:
+        - type: gitRemote
+          url: https://github.com/acme/checkout.git
+          file: prices.py
+          regex: "^def price\\(cents, discount=0\\):\\n    return round\\(cents / 100 \\* \\(1 - discount\\), 2\\)\\n$"
+          message: prices.py on main should combine both changes exactly as specified.
+        - type: gitRemote
+          url: https://github.com/acme/checkout.git
+          pattern: "^Support discounts"
+          message: Alice's commit must stay on main.
+        - type: gitRemote
+          url: https://github.com/acme/checkout.git
+          pattern: "^Round prices"
+          message: Your fix should be on main.
+        - type: gitRemote
+          url: https://github.com/acme/checkout.git
+          tag: v1.4.1
+          branch: main
+          message: Push an annotated tag v1.4.1 pointing at the released main commit.
+        - type: gitClean
+          path: /home/student/checkout
+    xp: 200
+    par: 9
+    solution:
+      - git pull --rebase || true
+      - "echo -e 'def price(cents, discount=0):\\n    return round(cents / 100 * (1 - discount), 2)' > prices.py"
+      - git add prices.py
+      - git rebase --continue
+      - git push
+      - git tag -a v1.4.1 -m "Hotfix 1.4.1 - price rounding"
+      - git push origin v1.4.1
+    explain: |
+      The rebase stopped on your commit because both sides changed the same line; you wrote the
+      combined version, `git add`, `git rebase --continue`, and the push became a fast-forward.
+      Tags aren't pushed by default — push them explicitly (`git push origin v1.4.1` or `--tags`).
+      Annotated tags (`-a`) record who tagged, when and why — use them for releases.

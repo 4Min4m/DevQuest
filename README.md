@@ -28,13 +28,19 @@ browser terminal. No backend, no runtime network calls. See [CLAUDE.md](CLAUDE.m
   and `sed` / `tee`. Three new Linux lessons (Services, Network troubleshooting, Performance &
   disks) with 7 missions, 3 knowledge checks and 4 boss fights: a crash-looping API,
   "it's always DNS", disk full at 2 AM, and inode exhaustion.
+- **Step 9 done:** a **Git simulator** with real object ids (blobs, trees and commits hash exactly
+  like Git), index, `.gitignore`, reflog, three-way merges with conflict markers, rebase,
+  cherry-pick, revert, stash, tags and offline remotes (clone, fetch, pull, push with rejections,
+  `--force-with-lease`, protected branches). Three lessons — Git fundamentals, Branching & merging,
+  Remotes & teamwork — with 13 missions, 3 knowledge checks and 3 boss fights (lost work after a
+  `reset --hard`, a release-day merge, a Friday hotfix with a rejected push).
 
 ### Roadmap (from the knowledge vault)
 
 | Step | Chapters | What gets built |
 |---|---|---|
 | ~~8~~ | 03 Linux (rest), 02 Networking tools | ✅ done (see above) |
-| 9 | 01 Version Control | Git simulator (commit, branch, merge, rebase, stash, cherry-pick, remotes) + missions |
+| ~~9~~ | 01 Version Control | ✅ done (see above) |
 | 10–11 | 05 Kubernetes | `kubectl` simulator: workloads, services, config, probes, scheduling, HPA, storage, RBAC, Helm |
 | 12 | 06 CI/CD, GitOps | Pipeline runner (GitHub Actions / GitLab CI), deployment strategies, ArgoCD-style sync |
 | 13 | 07 Cloud, 08 IaC | Terraform, Ansible, mock AWS |
@@ -67,6 +73,7 @@ src/sim/net.ts              simulated HTTP for curl (containers, services, remot
 src/sim/netsim/             DNS zone, /etc/hosts resolution, remote hosts; dig, ping, ss, ip...
 src/sim/systemd/            unit-file parser, service manager (failure modes), systemctl, journalctl
 src/sim/disk.ts             disk usage per mount (bytes + inodes) and the ENOSPC guard
+src/sim/git/                Git: objects (SHA-1), diff/merge3, repo plumbing, ops, cli/ (porcelain)
 src/game/                   mission engine: initial-state builder, validators, MissionSession;
                             progress.ts (XP, levels, streak, hearts, unlocking, skill tree),
                             store.ts (Zustand store persisted to localStorage)
@@ -86,6 +93,12 @@ Services and diagnostics: `systemctl` (status, start, stop, restart, reload, ena
 is-active, is-enabled, is-failed, cat, daemon-reload, list-units, reset-failed), `journalctl`
 (`-u`, `-n`, `-p`, `-xeu`), `dig`, `nslookup`, `host`, `ping`, `traceroute`, `ss`, `netstat`, `ip`,
 `hostname`, `top`, `free`, `uptime`, `vmstat`, `nproc`, `pgrep`, `lsof`, `ulimit`.
+
+`git`: `init clone config status add rm mv commit restore reset log show diff reflog tag clean
+branch switch checkout merge rebase cherry-pick revert stash remote fetch pull push cat-file
+hash-object rev-parse ls-files`, plus `git -C DIR` and `git -c key=value`. Remotes are simulated
+(hosted URLs such as `https://github.com/acme/shop.git`, or local bare repos from `git init --bare`).
+`git rebase -i` and the commit-message editor are not simulated (use `-m`).
 
 `docker`: `run create ps start stop restart kill rm logs exec port inspect images pull rmi`,
 `volume create|ls|rm|inspect|prune`, `network create|ls|rm|inspect|connect|disconnect`,
@@ -175,12 +188,18 @@ Check types: `fileExists`, `fileMissing`, `fileContains` (text / regex / equals)
 `outputContains`, `anyOf`, `not`, and for Docker: `containerRunning`, `containerAbsent`,
 `containerPort`, `containerEnv`, `containerMount`, `containerNetwork`, `containerInspect`,
 `containerFile`, `imageExists`, `imageInspect`, `volumeExists`, `networkExists`, `httpResponds`,
-and for the host: `serviceActive`, `serviceEnabled`, `diskUsageBelow`, `inodeUsageBelow`.
+for the host: `serviceActive`, `serviceEnabled`, `diskUsageBelow`, `inodeUsageBelow`,
+and for Git: `gitRepo`, `gitBranch`, `gitHead`, `gitClean`, `gitCommit` (message `pattern`),
+`gitFile` (content at a ref), `gitHistory` (count, linear, merges), `gitTracked`, `gitStash`,
+`gitRemote` (remote branch commits / files / tags).
 
 Host scenarios can also set `binaries` (what a program does when systemd runs it: port, required
 env vars/files, DB connection, open-file needs), `dns` records, `remotes` (hosts on the network),
 `perf` (load, memory, CPU), `disks` (sizes and inode counts), `bulkFiles` (thousands of small files)
-and a file `size` (an 18 GB log without 18 GB of content).
+a file `size` (an 18 GB log without 18 GB of content), and `gitHosted` (empty hosted remotes that
+`setup` can clone and push to; `protected` branches refuse direct pushes once setup is done).
+A solution line ending in `|| true` marks a step that is expected to fail (like a merge that stops
+on a conflict).
 
 `initialState.setup` runs real shell commands (e.g. `docker run ...`) to build the starting
 machine, so boss fights can start from a genuinely broken system. The content QA test (`src/content/content.test.ts`) proves every

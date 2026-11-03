@@ -1,5 +1,6 @@
 import type { DockerState } from './docker/types';
 import type { NetState } from './netsim/types';
+import type { GitState } from './git/types';
 import type { SystemdState } from './systemd/types';
 import { makeDir, makeFile } from './vfs/vfs';
 import type { DirNode, FsNode } from './vfs/types';
@@ -41,6 +42,8 @@ export interface SimState {
   net?: NetState;
   /** Load, memory and CPU figures for top/free/uptime/vmstat. */
   perf?: PerfState;
+  /** Git repositories on this machine and the simulated remotes it can reach. */
+  git?: GitState;
   /** Resource limits (ulimit). */
   limits?: { nofileSoft: number; nofileHard: number };
   /** Set when this state is a container's view of the world (docker exec). */
@@ -187,6 +190,7 @@ export function createDefaultFs(clock = DEFAULT_CLOCK): DirNode {
       home: {
         student: {
           'notes.txt': 'Welcome to DevOps Quest!\nType `help` to list available commands.\n',
+          '.gitconfig': '[user]\n\tname = Student\n\temail = student@devquest.local\n[init]\n\tdefaultBranch = main\n',
           projects: {},
         },
       },
@@ -274,6 +278,7 @@ export function createInitialState(overrides: Partial<SimState> = {}): SimState 
     docker: createDockerState(clock),
     systemd: createSystemdState(clock),
     net: createNetState(),
+    git: { repos: {}, remotes: {} },
     perf: {
       cpus: 2,
       load: [0.15, 0.1, 0.05],

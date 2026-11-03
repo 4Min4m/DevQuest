@@ -13,10 +13,11 @@ describe('lesson catalog', () => {
       'docker-basics', 'images-dockerfile', 'volumes-networks', 'compose', 'troubleshooting',
       'foundations', 'networking', 'storage-databases', 'system-design', 'sre',
       'systemd', 'network-tools', 'performance',
+      'version-control', 'git-branching', 'git-remotes',
     ]);
     const missions = lessons.flatMap((l) => l.missions);
-    expect(missions.filter((m) => m.type === 'guided' || m.type === 'free')).toHaveLength(23); // 8 Linux + 8 Docker + 7 services/network/performance
-    expect(missions.filter((m) => m.type === 'boss')).toHaveLength(7);
+    expect(missions.filter((m) => m.type === 'guided' || m.type === 'free')).toHaveLength(36); // 8 Linux + 8 Docker + 7 services/network/performance + 13 Git
+    expect(missions.filter((m) => m.type === 'boss')).toHaveLength(10);
     expect(missions.filter((m) => m.type === 'quiz').length).toBeGreaterThanOrEqual(20);
   });
 
@@ -112,8 +113,9 @@ describe.each(terminalMissions)('mission %s', (_name, mission) => {
     for (const line of mission.solution) {
       const { result } = s.run(line);
       expect(result.exitCode, `exit code of '${line}'`).toBe(0);
-      // Progress notes are fine, and `docker logs` replays the container's own stderr.
-      if (/^docker( compose)? logs\b/.test(line)) continue;
+      // Progress notes are fine, `docker logs` replays the container's own stderr, and
+      // `cmd || true` marks a step that is expected to fail (e.g. a merge that stops on a conflict).
+      if (/^docker( compose)? logs\b/.test(line) || /\|\| true$/.test(line)) continue;
       const stderr = result.output.filter((c) => c.stream === 'stderr' && !c.note).map((c) => c.text).join('');
       expect(stderr, `stderr of '${line}'`).toBe('');
     }

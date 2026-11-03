@@ -58,8 +58,8 @@ describe('ls', () => {
     const t = makeShell();
     t.setup('touch .env');
     expect(t.run('ls').out).not.toContain('.env');
-    expect(t.run('ls -A').out).toBe('.env  notes.txt  projects\n');
-    expect(t.run('ls -a').out).toBe('.  ..  .env  notes.txt  projects\n');
+    expect(t.run('ls -A').out).toBe('.env  .gitconfig  notes.txt  projects\n');
+    expect(t.run('ls -a').out).toBe('.  ..  .env  .gitconfig  notes.txt  projects\n');
   });
 
   it('long format', () => {

@@ -241,3 +241,53 @@ describe('host validators and initial state (services, DNS, disks)', () => {
     expect(pass({ type: 'inodeUsageBelow', mount: '/srv', percent: 50 }, cleaned)).toBe(true);
   });
 });
+
+describe('git validators', () => {
+  const base = {
+    files: { '/home/student/r/a.txt': 'one\n' },
+    gitHosted: [{ url: 'https://github.com/acme/r.git' }],
+    setup: ['git init -q', 'git add .', 'git commit -qm "First"', 'git remote add origin https://github.com/acme/r.git', 'git push -q -u origin main'],
+    cwd: '/home/student/r',
+  };
+
+  it('repo, branch, head, commit, file, history', () => {
+    const ctx = stateWith(['git switch -qc feat', 'echo two > b.txt', 'git add b.txt', 'git commit -qm "Add b"'], base);
+    const path = '/home/student/r';
+    expect(pass({ type: 'gitRepo', path }, ctx)).toBe(true);
+    expect(pass({ type: 'gitRepo', path: '/home/student' }, ctx)).toBe(false);
+    expect(pass({ type: 'gitBranch', path, name: 'feat' }, ctx)).toBe(true);
+    expect(pass({ type: 'gitBranch', path, name: 'nope', exists: false }, ctx)).toBe(true);
+    expect(pass({ type: 'gitHead', path, branch: 'feat' }, ctx)).toBe(true);
+    expect(pass({ type: 'gitCommit', path, pattern: '^Add b', tipOnly: true }, ctx)).toBe(true);
+    expect(pass({ type: 'gitCommit', path, ref: 'main', pattern: '^Add b' }, ctx)).toBe(false);
+    expect(pass({ type: 'gitFile', path, file: 'b.txt', text: 'two' }, ctx)).toBe(true);
+    expect(pass({ type: 'gitFile', path, ref: 'main', file: 'b.txt', absent: true }, ctx)).toBe(true);
+    expect(pass({ type: 'gitHistory', path, count: 2, linear: true }, ctx)).toBe(true);
+    expect(pass({ type: 'gitHistory', path, minMerges: 1 }, ctx)).toBe(false);
+    expect(describeCheck({ type: 'gitBranch', path, name: 'x', exists: false })).toBe('branch `x` should be deleted');
+  });
+
+  it('clean, tracked, stash', () => {
+    const dirty = stateWith(['echo change >> a.txt', 'echo s > secret.env'], base);
+    const path = '/home/student/r';
+    expect(pass({ type: 'gitClean', path }, dirty)).toBe(false);
+    expect(pass({ type: 'gitTracked', path, file: 'secret.env', tracked: false }, dirty)).toBe(true);
+    const stashed = stateWith(['echo change >> a.txt', 'git stash -q'], base);
+    expect(pass({ type: 'gitClean', path }, stashed)).toBe(true);
+    expect(pass({ type: 'gitStash', path, count: 1 }, stashed)).toBe(true);
+    const untracked = stateWith(['echo x > new.txt'], base);
+    expect(pass({ type: 'gitClean', path }, untracked)).toBe(true);
+    expect(pass({ type: 'gitClean', path, untracked: false }, untracked)).toBe(false);
+  });
+
+  it('remote branches, files and tags', () => {
+    const ctx = stateWith(['echo two >> a.txt', 'git commit -qam "Second"', 'git push -q', 'git tag v1', 'git push -q origin v1'], base);
+    const url = 'https://github.com/acme/r.git';
+    expect(pass({ type: 'gitRemote', url, pattern: '^Second' }, ctx)).toBe(true);
+    expect(pass({ type: 'gitRemote', url: 'https://github.com/acme/r', file: 'a.txt', text: 'two' }, ctx)).toBe(true);
+    expect(pass({ type: 'gitRemote', url, branch: 'feat', exists: false }, ctx)).toBe(true);
+    expect(pass({ type: 'gitRemote', url, tag: 'v1', branch: 'main' }, ctx)).toBe(true);
+    expect(pass({ type: 'gitRemote', url, tag: 'v2' }, ctx)).toBe(false);
+    expect(pass({ type: 'gitRemote', url, linear: true }, ctx)).toBe(true);
+  });
+});

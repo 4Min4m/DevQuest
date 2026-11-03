@@ -6,7 +6,7 @@ const BRANCHES = [
   'linux-basics', 'files-permissions', 'processes', 'text-processing', 'docker-basics',
   'images-dockerfile', 'volumes-networks', 'compose', 'troubleshooting',
   'systemd', 'network-tools', 'performance',
-  'version-control', 'kubernetes', 'cicd', 'cloud-iac', 'observability', 'security',
+  'version-control', 'git-branching', 'git-remotes', 'kubernetes', 'cicd', 'cloud-iac', 'observability', 'security',
 ];
 
 /** Collects every problem in a lesson file, so authors see them all at once. */
@@ -96,6 +96,25 @@ function checkCheck(c: unknown, where: string, p: Problems): void {
         p.add(where, `serviceActive state must be active, inactive or failed`);
       }
       break;
+    case 'gitRepo':
+    case 'gitHead':
+    case 'gitClean':
+    case 'gitCommit':
+    case 'gitFile':
+    case 'gitHistory':
+    case 'gitTracked':
+    case 'gitStash':
+    case 'gitBranch':
+      needs('path');
+      if (c.type === 'gitHead') needs('branch');
+      if (c.type === 'gitBranch') needs('name');
+      if (c.type === 'gitCommit') needs('pattern');
+      if (c.type === 'gitFile' || c.type === 'gitTracked') needs('file');
+      if (c.type === 'gitStash' && typeof c.count !== 'number') p.add(where, 'gitStash needs a numeric count');
+      break;
+    case 'gitRemote':
+      needs('url');
+      break;
     case 'diskUsageBelow':
     case 'inodeUsageBelow':
       needs('mount');
@@ -109,7 +128,7 @@ function checkCheck(c: unknown, where: string, p: Problems): void {
       checkCheck(c.check, `${where}.check`, p);
       break;
   }
-  for (const key of ['regex'] as const) {
+  for (const key of ['regex', 'pattern'] as const) {
     if (typeof c[key] === 'string') {
       try {
         new RegExp(c[key] as string);

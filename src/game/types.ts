@@ -28,6 +28,8 @@ export type BranchId =
   | 'performance'
   // planned
   | 'version-control'
+  | 'git-branching'
+  | 'git-remotes'
   | 'kubernetes'
   | 'cicd'
   | 'cloud-iac'
@@ -146,6 +148,35 @@ export type Check = CheckBase &
     | { type: 'diskUsageBelow'; mount: string; percent: number }
     /** `df -i` IUse% of the filesystem holding `mount` is below `percent`. */
     | { type: 'inodeUsageBelow'; mount: string; percent: number }
+    // ---- Git (paths are working-tree roots)
+    | { type: 'gitRepo'; path: string }
+    | { type: 'gitBranch'; path: string; name: string; exists?: boolean }
+    | { type: 'gitHead'; path: string; branch: string }
+    /** Nothing staged or modified, no conflict or merge/rebase in progress (untracked: false also forbids untracked files). */
+    | { type: 'gitClean'; path: string; untracked?: boolean }
+    /** A commit reachable from `ref` (default HEAD) whose message matches `pattern`; tipOnly: the ref's own commit. */
+    | { type: 'gitCommit'; path: string; ref?: string; pattern: string; tipOnly?: boolean }
+    /** File content as committed at `ref` (default HEAD). */
+    | { type: 'gitFile'; path: string; ref?: string; file: string; text?: string; regex?: string; absent?: boolean }
+    | { type: 'gitHistory'; path: string; ref?: string; count?: number; minCount?: number; linear?: boolean; minMerges?: number }
+    /** Tracked = in the index; tracked: false = neither in the index nor in HEAD. */
+    | { type: 'gitTracked'; path: string; file: string; tracked?: boolean }
+    /** A simulated remote: a branch (default main) with commits / file content, or a tag. */
+    | {
+        type: 'gitRemote';
+        url: string;
+        branch?: string;
+        tag?: string;
+        /** Regex a commit message on the branch must match. */
+        pattern?: string;
+        file?: string;
+        text?: string;
+        regex?: string;
+        absent?: boolean;
+        linear?: boolean;
+        exists?: boolean;
+      }
+    | { type: 'gitStash'; path: string; count: number }
   );
 
 export type CheckType = Check['type'];
@@ -194,6 +225,11 @@ export interface InitialStateSpec {
   perf?: Partial<PerfState>;
   /** Overrides for existing filesystems (matched by mount point) or new ones. */
   disks?: (Partial<Disk> & { mount: string })[];
+  /**
+   * Hosted Git remotes (e.g. https://github.com/acme/shop.git), created empty before `setup`
+   * runs so setup commands can clone and push to them. `protected` branches refuse direct pushes.
+   */
+  gitHosted?: { url: string; branch?: string; protected?: string[] }[];
   /** Simulated seconds that pass after setup (so containers look "Up 5 minutes"). Default 300. */
   setupAge?: number;
 }
