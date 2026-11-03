@@ -1,0 +1,111 @@
+id: processes
+title: Processes & signals
+branch: processes
+prerequisites: [files-permissions]
+theory: |
+  Every running program is a **process** with a numeric **PID**.
+
+  - `ps` shows the processes in your terminal session
+  - `ps aux` shows **every** process: owner, PID, CPU and memory use, and the full command
+  - `ps aux | grep NAME` filters that list
+
+  You stop a process by sending it a **signal** with `kill`:
+
+  | Signal | Command | Meaning |
+  |---|---|---|
+  | SIGTERM (15) | `kill PID` | "please shut down" — the program can clean up first (default) |
+  | SIGKILL (9) | `kill -9 PID` | the kernel stops it immediately; it can't be caught or ignored |
+
+  Always try **SIGTERM first**: SIGKILL gives the program no chance to flush data or close connections.
+  You can only signal **your own** processes (unless you're root).
+missions:
+  - id: runaway-miner
+    title: Stop the runaway process
+    type: guided
+    prompt: |
+      Your laptop fan is screaming. Something called `miner.py` is eating all the CPU.
+
+      **Find its PID and stop it with a normal (graceful) `kill`.**
+      Leave the web server (`node server.js`) running!
+    initialState:
+      processes:
+        - pid: 4100
+          command: node server.js
+          cpu: 1.2
+          mem: 2.3
+          stat: Sl
+        - pid: 4242
+          command: python3 /home/student/miner.py
+          cpu: 98.7
+          mem: 0.4
+          stat: R
+          time: "41:07"
+    hints:
+      - text: "`ps aux` lists every process along with its PID (the second column)."
+        cost: 5
+      - text: "`ps aux | grep miner` shows just the matching line."
+        cost: 5
+      - text: The miner's PID is 4242, so run `kill 4242`.
+        cost: 10
+    validator:
+      checks:
+        - type: processAbsent
+          match: miner.py
+          message: "`miner.py` should no longer be running."
+        - type: commandUsed
+          command: ps
+          message: Use `ps` to find the PID rather than guessing it.
+      guards:
+        - type: processRunning
+          match: node server.js
+          message: You stopped the web server! Only `miner.py` should be killed.
+    xp: 25
+    par: 2
+    explain: |
+      `kill 4242` sent **SIGTERM**, the polite "please exit" signal. The script could handle it
+      and shut down cleanly. On a real server you'd then check *why* it was running in the
+      first place, for example with `crontab -l`.
+    solution:
+      - ps aux
+      - kill 4242
+
+  - id: stubborn-worker
+    title: The worker that won't die
+    type: free
+    prompt: |
+      A background job, `stuck-worker`, has hung and is ignoring polite shutdown requests.
+
+      **Get rid of it.** Leave `node server.js` alone.
+    initialState:
+      processes:
+        - pid: 4100
+          command: node server.js
+          cpu: 1.1
+          mem: 2.3
+          stat: Sl
+        - pid: 5150
+          command: stuck-worker --queue jobs
+          cpu: 0.0
+          mem: 6.1
+          stat: D
+          ignoresTerm: true
+    hints: []
+    validator:
+      checks:
+        - type: processAbsent
+          match: stuck-worker
+          message: "`stuck-worker` is still running."
+      guards:
+        - type: processRunning
+          match: node server.js
+          message: You stopped the web server! Only `stuck-worker` should be killed.
+    xp: 35
+    par: 3
+    explain: |
+      The worker ignored SIGTERM, so `kill PID` did nothing. **SIGKILL** (`kill -9 PID` or
+      `kill -KILL PID`) can't be caught: the kernel removes the process. Use it as a last resort,
+      because the program gets no chance to clean up (temp files, locks, half-written data).
+    solution:
+      - ps aux | grep stuck
+      - kill 5150
+      - kill -9 5150

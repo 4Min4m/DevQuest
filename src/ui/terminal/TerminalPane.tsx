@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
 import { useEffect, useRef } from 'react';
 import type { Shell } from '../../sim/shell/shell';
+import type { RunResult } from '../../sim/shell/types';
 import { tildify } from '../../sim/vfs/path';
 import { LineEditor } from './lineEditor';
 
@@ -27,14 +28,16 @@ interface Props {
   shell: Shell;
   /** Printed once when the terminal starts. */
   banner?: string;
-  /** Called after every executed line, e.g. so a mission can re-validate. */
-  onCommand?: (line: string, exitCode: number) => void;
+  /** Runs a line; defaults to `shell.run`. Missions route commands through their session. */
+  execute?: (line: string) => RunResult;
+  /** Called after every executed line. May return extra text to print before the next prompt. */
+  onCommand?: (line: string, result: RunResult) => string | void;
 }
 
-export function TerminalPane({ shell, banner, onCommand }: Props) {
+export function TerminalPane({ shell, banner, execute, onCommand }: Props) {
   const host = useRef<HTMLDivElement>(null);
-  const onCommandRef = useRef(onCommand);
-  onCommandRef.current = onCommand;
+  const callbacks = useRef({ execute, onCommand });
+  callbacks.current = { execute, onCommand };
 
   useEffect(() => {
     if (!host.current) return;
@@ -62,23 +65,26 @@ export function TerminalPane({ shell, banner, onCommand }: Props) {
         if (ev.type === 'write') term.write(ev.data);
         else if (ev.type === 'clear') term.clear();
         else {
-          const result = shell.run(ev.line);
+          const run = callbacks.current.execute ?? ((l: string) => shell.run(l));
+          const result = run(ev.line);
           if (result.clear) term.clear();
           for (const chunk of result.output) {
             const text = toTerminal(chunk.text);
             term.write(chunk.stream === 'stderr' ? RED + text + RESET : text);
           }
-          onCommandRef.current?.(ev.line, result.exitCode);
+          const extra = callbacks.current.onCommand?.(ev.line, result);
+          if (extra) term.write(toTerminal(extra));
           term.write(editor.render());
         }
       }
     });
 
-    const onResize = () => fit.fit();
-    window.addEventListener('resize', onResize);
+    // Refit whenever the panel changes size (window resize or layout changes).
+    const ro = new ResizeObserver(() => fit.fit());
+    ro.observe(host.current);
     term.focus();
     return () => {
-      window.removeEventListener('resize', onResize);
+      ro.disconnect();
       sub.dispose();
       term.dispose();
     };

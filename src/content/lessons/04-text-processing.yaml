@@ -1,0 +1,108 @@
+id: text-processing
+title: Slicing logs with pipes
+branch: text-processing
+prerequisites: [processes]
+theory: |
+  Small tools combined with **pipes** answer most "what's going on?" questions on a server.
+
+  - `grep PATTERN FILE`: lines that match (`-c` counts them, `-i` ignores case, `-v` inverts)
+  - `wc -l`: count lines
+  - `sort`: sort lines (`-n` numerically, `-r` reversed)
+  - `uniq -c`: collapse **adjacent** duplicate lines and count them, so `sort` first!
+  - `head -n N` / `tail -n N`: first or last N lines
+
+  `|` sends one command's output into the next: `grep ERROR app.log | wc -l`
+
+  `>` writes output to a file (replacing it), and `>>` appends to it.
+missions:
+  - id: count-errors
+    title: Count the errors
+    type: guided
+    prompt: |
+      The on-call engineer wants to know how many lines in `/var/log/app.log` contain
+      `ERROR` (uppercase).
+
+      **Write just that number into `~/error_count.txt`.**
+    initialState:
+      files:
+        /var/log/app.log:
+          content: |
+            2026-11-03 08:00:01 INFO  service starting
+            2026-11-03 08:00:02 INFO  no error found in config
+            2026-11-03 08:01:15 ERROR database connection refused
+            2026-11-03 08:01:20 WARN  retrying database connection
+            2026-11-03 08:01:25 ERROR database connection refused
+            2026-11-03 08:02:00 INFO  connected to database
+            2026-11-03 08:15:42 ERROR request timeout on /api/orders
+            2026-11-03 08:20:11 INFO  health check ok
+            2026-11-03 08:31:09 ERROR disk usage above 90%
+          mode: "644"
+    hints:
+      - text: "`grep ERROR /var/log/app.log` prints the matching lines. Note that it is case-sensitive."
+        cost: 5
+      - text: "`grep -c` prints the count instead of the lines, and `> FILE` saves output to a file."
+        cost: 5
+      - text: Run `grep -c ERROR /var/log/app.log > ~/error_count.txt`.
+        cost: 10
+    validator:
+      checks:
+        - type: fileContains
+          path: /home/student/error_count.txt
+          regex: '^\s*4\s*$'
+          message: "`~/error_count.txt` should contain only the number of lines with `ERROR`."
+        - type: commandUsed
+          command: grep
+          message: Use `grep` to find the lines.
+    xp: 25
+    par: 1
+    explain: |
+      `grep -c ERROR` counted 4 lines. The `no error found` line didn't match because grep is
+      case-sensitive (`-i` would have made it 5). `grep ERROR app.log | wc -l` gives the same
+      answer, and the redirect `>` saved the result to a file.
+    solution:
+      - grep -c ERROR /var/log/app.log > ~/error_count.txt
+
+  - id: top-client
+    title: Who's hammering the API?
+    type: free
+    prompt: |
+      `~/ips.txt` lists the client IP of every request the API received (one per line).
+
+      **Find the IP that made the most requests and write it to `~/top_ip.txt`.**
+      A single line like `5 10.1.2.3` (count + IP) or just the IP is fine.
+    initialState:
+      files:
+        /home/student/ips.txt: |
+          192.168.1.20
+          10.0.0.7
+          172.16.0.4
+          10.0.0.7
+          192.168.1.20
+          10.0.0.7
+          203.0.113.9
+          10.0.0.7
+          172.16.0.4
+          192.168.1.20
+          198.51.100.3
+          10.0.0.7
+    hints: []
+    validator:
+      checks:
+        - type: fileContains
+          path: /home/student/top_ip.txt
+          regex: '^\s*(\d+\s+)?10\.0\.0\.7\s*$'
+          message: "`~/top_ip.txt` should contain one line: the busiest IP (optionally preceded by its count)."
+        - type: commandUsed
+          command: uniq
+          message: Use `uniq -c` to count the requests per IP.
+    xp: 40
+    par: 1
+    explain: |
+      `sort | uniq -c | sort -rn | head -n 1` is one of the most useful one-liners in ops:
+
+      1. `sort` groups identical lines together
+      2. `uniq -c` collapses each group and prefixes its count
+      3. `sort -rn` puts the biggest count first
+      4. `head -n 1` keeps only the winner
+    solution:
+      - sort ips.txt | uniq -c | sort -rn | head -n 1 > top_ip.txt

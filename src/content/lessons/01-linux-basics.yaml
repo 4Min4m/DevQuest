@@ -1,0 +1,105 @@
+id: linux-basics
+title: Finding your way around
+branch: linux-basics
+prerequisites: []
+theory: |
+  Everything in Linux lives in **one tree** that starts at `/` (the *root*).
+  Your shell always has a **current working directory**: commands without a full path act there.
+
+  | Command | What it does |
+  |---|---|
+  | `pwd` | print the directory you are in |
+  | `ls` | list what's in a directory (`ls -l` for details, `ls -a` to include hidden files) |
+  | `cd DIR` | change directory |
+  | `cat FILE` | print a file |
+  | `mkdir DIR` | create a directory (`-p` also creates missing parents) |
+  | `touch FILE` | create an empty file |
+
+  **Paths** can be *absolute* (`/home/student/projects`) or *relative* to where you are
+  (`projects`, `../tmp`). Shortcuts: `~` is your home directory, `.` is "here", `..` is "one level up".
+
+  Press **Tab** to auto-complete names and **↑** to recall previous commands.
+missions:
+  - id: find-the-todo
+    title: Find the TODO list
+    type: guided
+    prompt: |
+      A teammate left a file called `todo.txt` somewhere inside `~/projects`.
+
+      **Move into the directory that contains it, then print its contents.**
+    initialState:
+      files:
+        /home/student/projects/website/todo.txt: |
+          1. Fix the login page
+          2. Deploy to staging
+        /home/student/projects/website/index.html: "<h1>Hello</h1>\n"
+        /home/student/projects/api/main.py: "print('api')\n"
+        /home/student/projects/api/README.md: "# API service\n"
+    hints:
+      - text: Start with `ls ~/projects` to see which project folders exist.
+        cost: 5
+      - text: Look inside each one, e.g. `ls ~/projects/api`. When you find it, `cd` into that folder.
+        cost: 5
+      - text: Run `cd ~/projects/website` and then `cat todo.txt`.
+        cost: 10
+    validator:
+      checks:
+        - type: cwd
+          path: /home/student/projects/website
+          message: Your current directory should be the folder that contains `todo.txt`.
+        - type: outputContains
+          text: Deploy to staging
+          message: Print the contents of `todo.txt` with `cat`.
+    xp: 20
+    par: 3
+    explain: |
+      `cd` changed your shell's working directory, which is why the prompt now shows
+      `~/projects/website`. Inside it, the relative name `todo.txt` was enough for `cat`.
+      You could also have printed it from anywhere with the absolute path
+      `cat /home/student/projects/website/todo.txt`.
+    solution:
+      - cd ~/projects/website
+      - cat todo.txt
+
+  - id: scaffold-app
+    title: Lay out a new app
+    type: guided
+    prompt: |
+      You're starting a new service. Create this layout in your home directory:
+
+      ```
+      ~/app/
+      ├── config/
+      │   └── app.env      (an empty file)
+      ├── logs/
+      └── src/
+      ```
+    hints:
+      - text: "`mkdir` accepts several directories at once, and `-p` creates missing parent directories."
+        cost: 5
+      - text: "`touch FILE` creates an empty file."
+        cost: 5
+      - text: Run `mkdir -p app/src app/logs app/config` and then `touch app/config/app.env`.
+        cost: 10
+    validator:
+      checks:
+        - type: fileExists
+          path: /home/student/app/src
+          kind: dir
+        - type: fileExists
+          path: /home/student/app/logs
+          kind: dir
+        - type: fileExists
+          path: /home/student/app/config
+          kind: dir
+        - type: fileExists
+          path: /home/student/app/config/app.env
+          kind: file
+    xp: 25
+    par: 2
+    explain: |
+      `mkdir -p` creates every missing directory along the path, and it doesn't complain
+      when they already exist. That makes it safe to use in setup scripts you might re-run.
+    solution:
+      - mkdir -p app/src app/logs app/config
+      - touch app/config/app.env

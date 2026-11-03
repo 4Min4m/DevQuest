@@ -1,0 +1,115 @@
+id: files-permissions
+title: Permissions & ownership
+branch: files-permissions
+prerequisites: [linux-basics]
+theory: |
+  Run `ls -l` and the first column tells you who may do what:
+
+  ```
+  -rwxr-xr--  1 student devs  120 Nov  3 09:00 deploy.sh
+   └┬┘└┬┘└┬┘     └──┬──┘ └┬┘
+   user group other  owner group
+  ```
+
+  Each group of three is **r**ead, **w**rite, e**x**ecute. On a directory, `x` means "may enter it".
+
+  `chmod` changes these bits:
+  - **octal:** each digit is r=4 + w=2 + x=1, e.g. `chmod 755 f` is `rwxr-xr-x` and `chmod 600 f` is `rw-------`
+  - **symbolic:** `chmod u+x f` (user gets x), `chmod go-w f` (group and others lose w)
+
+  `chown user:group FILE` changes the owner, and only `root` can give a file to someone else.
+  Use `mv` to move or rename files and `cp` to copy them.
+missions:
+  - id: make-executable
+    title: Make the deploy script runnable
+    type: guided
+    prompt: |
+      `~/deploy.sh` can't be executed. Change its permissions to `rwxr-xr-x`:
+      you can read, write and run it, and everyone else can read and run it.
+    initialState:
+      files:
+        /home/student/deploy.sh:
+          content: |
+            #!/bin/bash
+            echo "Deploying..."
+          mode: "644"
+    hints:
+      - text: Check the current permissions with `ls -l deploy.sh`.
+        cost: 5
+      - text: "In octal, `rwx` = 4+2+1 = 7 and `r-x` = 4+1 = 5."
+        cost: 5
+      - text: Run `chmod 755 deploy.sh`.
+        cost: 10
+    validator:
+      checks:
+        - type: fileMode
+          path: /home/student/deploy.sh
+          mode: "755"
+          message: "`deploy.sh` should be `rwxr-xr-x` (755)."
+      guards:
+        - type: fileContains
+          path: /home/student/deploy.sh
+          equals: |
+            #!/bin/bash
+            echo "Deploying..."
+          message: Don't delete or change the script itself, only its permissions.
+    xp: 20
+    par: 2
+    explain: |
+      `755` means owner `7` (rwx), group `5` (r-x), others `5` (r-x). It's the usual mode
+      for scripts and programs. `chmod +x deploy.sh` would have produced the same
+      result here, because the default umask of 022 keeps write access away from group and others.
+    solution:
+      - ls -l deploy.sh
+      - chmod 755 deploy.sh
+
+  - id: lock-down-secrets
+    title: Lock down the secrets
+    type: free
+    prompt: |
+      Someone left `~/secrets.env` readable **and writable by everyone**.
+
+      1. Make it readable and writable **only by you** (no access for group or others).
+      2. Move it into the existing `~/config/` directory.
+
+      Don't change what's inside it.
+    initialState:
+      files:
+        /home/student/secrets.env:
+          content: "DB_PASSWORD=hunter2\n"
+          mode: "666"
+        /home/student/config:
+          type: dir
+    hints: []
+    validator:
+      checks:
+        - type: fileMissing
+          path: /home/student/secrets.env
+          message: "`secrets.env` should no longer be in your home directory."
+        - type: fileExists
+          path: /home/student/config/secrets.env
+          kind: file
+          message: "`secrets.env` should be inside `~/config/`."
+        - type: fileMode
+          path: /home/student/config/secrets.env
+          mode: "600"
+          message: "`~/config/secrets.env` should be `rw-------` (600)."
+      guards:
+        - type: anyOf
+          message: The secret must not be deleted or modified.
+          checks:
+            - type: fileContains
+              path: /home/student/secrets.env
+              equals: "DB_PASSWORD=hunter2\n"
+            - type: fileContains
+              path: /home/student/config/secrets.env
+              equals: "DB_PASSWORD=hunter2\n"
+    xp: 30
+    par: 2
+    explain: |
+      `600` gives `rw-` to the owner and nothing to anyone else, which is the standard mode for
+      secrets such as `.env` files and SSH private keys (`ssh` refuses keys that others can read).
+      `mv` keeps the file's permissions, so you could chmod before or after moving it.
+    solution:
+      - chmod 600 secrets.env
+      - mv secrets.env config/
