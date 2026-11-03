@@ -1,0 +1,138 @@
+id: docker-basics
+title: Your first containers
+branch: docker-basics
+prerequisites: [text-processing]
+theory: |
+  An **image** is a packaged filesystem plus a default command (e.g. `nginx`). A **container**
+  is a running (or stopped) instance of an image, with its own filesystem, processes and network.
+
+  | Command | What it does |
+  |---|---|
+  | `docker run -d --name web -p 8080:80 nginx` | start a container **d**etached, named `web`, publishing host port 8080 → container port 80 |
+  | `docker ps` / `docker ps -a` | list running / all containers |
+  | `docker logs web` | what the container printed |
+  | `docker exec web CMD` | run a command inside a running container (`-it` for a shell) |
+  | `docker stop web` / `docker rm web` | stop / delete a container |
+  | `docker images` | images on this machine (`docker run` pulls missing ones) |
+
+  `-p HOST:CONTAINER` is the classic source of confusion: the **left** side is the port on
+  your machine, the **right** side is the port the app listens on inside the container.
+missions:
+  - id: first-container
+    title: Hello, container
+    type: guided
+    prompt: |
+      Start an **nginx** web server in the background:
+
+      - name the container `web`
+      - make it reachable at **http://localhost:8080** (nginx listens on port 80 inside)
+
+      Then check it with `curl localhost:8080`.
+    hints:
+      - text: "`docker run` with `-d` runs in the background, `--name` names the container and `-p` publishes a port."
+        cost: 5
+      - text: "The port mapping is `-p HOST:CONTAINER`, so here it's `-p 8080:80`."
+        cost: 5
+      - text: Run `docker run -d --name web -p 8080:80 nginx`.
+        cost: 10
+    validator:
+      checks:
+        - type: containerRunning
+          name: web
+          image: nginx
+          message: A container named `web` running the `nginx` image.
+        - type: containerPort
+          name: web
+          hostPort: 8080
+          containerPort: 80
+          message: "`web` should publish host port 8080 → container port 80."
+        - type: httpResponds
+          url: http://localhost:8080
+          contains: Welcome to nginx!
+          message: http://localhost:8080 should show the nginx welcome page.
+    xp: 30
+    par: 2
+    explain: |
+      `docker run` pulled the image, created a container and started nginx inside it. `-d`
+      detached it from your terminal and `-p 8080:80` asked Docker to forward your port 8080 to the
+      container's port 80. Without `-p`, nginx would run fine but be unreachable from your machine.
+    solution:
+      - docker run -d --name web -p 8080:80 nginx
+      - curl -s localhost:8080
+
+  - id: clean-up
+    title: Clean up the mess
+    type: guided
+    prompt: |
+      Someone ran a lot of throwaway containers on this server. **Remove every container
+      that is not running.** The `api` container serves real traffic, so leave it alone!
+    initialState:
+      setup:
+        - docker pull alpine
+        - docker pull nginx
+        - docker run --name old-job-1 alpine echo done
+        - docker run --name old-job-2 alpine sh -c "exit 1" || true
+        - docker run -d --name api -p 8080:80 nginx
+        - docker run --name debug-shell alpine true
+    hints:
+      - text: "`docker ps` only shows running containers; `docker ps -a` shows all of them."
+        cost: 5
+      - text: "`docker rm` accepts several names at once."
+        cost: 5
+      - text: Run `docker rm old-job-1 old-job-2 debug-shell`.
+        cost: 10
+    validator:
+      checks:
+        - type: containerAbsent
+          name: old-job-1
+        - type: containerAbsent
+          name: old-job-2
+        - type: containerAbsent
+          name: debug-shell
+      guards:
+        - type: containerRunning
+          name: api
+          message: You took down `api`, which was serving real traffic!
+    xp: 30
+    par: 2
+    explain: |
+      Stopped containers keep their filesystem and logs until you remove them, which is handy
+      for debugging but they pile up. `docker rm` refuses to delete a running container unless you
+      add `-f`, a useful safety net. Next time, `docker run --rm` deletes a container as soon as it exits.
+    solution:
+      - docker ps -a
+      - docker rm old-job-1 old-job-2 debug-shell
+
+  - id: peek-inside
+    title: Peek inside
+    type: free
+    prompt: |
+      Which release is deployed? The `web` container keeps it in **`/etc/app/RELEASE`**
+      (inside the container, not on your machine).
+
+      **Save that release string into `~/release.txt` on your machine.**
+    initialState:
+      setup:
+        - docker pull nginx
+        - docker run -d --name web nginx
+        - docker exec web sh -c "mkdir -p /etc/app && echo v2.7.1 > /etc/app/RELEASE"
+    hints: []
+    validator:
+      checks:
+        - type: fileContains
+          path: /home/student/release.txt
+          regex: '^\s*v2\.7\.1\s*$'
+          message: "`~/release.txt` should contain exactly the release string from the container."
+        - type: commandUsed
+          command: docker
+          argsInclude: [exec]
+          message: Read the file with `docker exec`.
+    xp: 35
+    par: 1
+    explain: |
+      `docker exec web cat /etc/app/RELEASE` runs `cat` **inside** the container, and its output
+      flows back to your shell, where `>` redirects it into a file on **your** machine. The `>` is
+      handled by your host shell, not the container. `docker exec -it web bash` would give you an
+      interactive shell instead.
+    solution:
+      - docker exec web cat /etc/app/RELEASE > ~/release.txt

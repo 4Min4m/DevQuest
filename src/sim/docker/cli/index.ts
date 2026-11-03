@@ -1,5 +1,7 @@
 import type { CommandContext, CommandDef } from '../../shell/types';
 import { dockerExec, dockerKill, dockerLogs, dockerPort, dockerPs, dockerRestart, dockerRm, dockerStart, dockerStop } from './containers';
+import { dockerBuild } from './build';
+import { dockerCompose } from './compose';
 import { dockerImages, dockerPull, dockerRmi } from './images';
 import { dockerInspect, dockerNetwork, dockerVolume } from './objects';
 import { dockerCreate, dockerRun } from './run';
@@ -24,6 +26,8 @@ const TOP: Record<string, Handler> = {
   rmi: dockerRmi,
   volume: dockerVolume,
   network: dockerNetwork,
+  build: dockerBuild,
+  compose: dockerCompose,
 };
 
 /** `docker container ...` / `docker image ...` management commands map onto the classic ones. */
@@ -51,13 +55,15 @@ const IMAGE: Record<string, Handler> = {
   pull: dockerPull,
   rm: dockerRmi,
   remove: dockerRmi,
+  build: dockerBuild,
   inspect: (ctx, cmd) => dockerInspect(ctx, cmd, 'image'),
 };
 
-/** Real docker commands that later lessons will add. */
+/** Real docker commands not simulated (yet). */
 const COMING_LATER: Record<string, string> = {
-  build: 'Images & Dockerfile',
-  compose: 'Compose',
+  push: 'a registry (DevOps Quest works offline)',
+  login: 'a registry (DevOps Quest works offline)',
+  swarm: 'Swarm mode',
 };
 
 const USAGE = `
@@ -67,12 +73,14 @@ A self-sufficient runtime for containers (simulated by DevOps Quest)
 
 Common Commands:
   run         Create and run a new container from an image
+  build       Build an image from a Dockerfile
   exec        Execute a command in a running container
   ps          List containers
   images      List images
   pull        Download an image from a registry
 
 Management Commands:
+  compose     Docker Compose
   container   Manage containers
   image       Manage images
   network     Manage networks
@@ -113,7 +121,7 @@ function dispatch(ctx: CommandContext, table: Record<string, Handler>, prefix: s
   const h = table[sub];
   if (h) return h({ ...ctx, args: rest }, prefix ? `${prefix} ${sub}` : sub);
   if (!prefix && COMING_LATER[sub]) {
-    ctx.err(`devquest: 'docker ${sub}' is a real command; it arrives with the ${COMING_LATER[sub]} lessons\n`);
+    ctx.err(`devquest: 'docker ${sub}' is a real command, but it needs ${COMING_LATER[sub]} and is not simulated\n`);
     return 1;
   }
   ctx.err(`docker: '${prefix ? prefix + ' ' : ''}${sub}' is not a docker command.\nSee 'docker --help'\n`);

@@ -26,6 +26,8 @@ export interface EngineHooks {
   spawn?: (state: SimState) => ShellLike;
   /** Is there a simulated Linux command with this name? */
   hasCommand?: (name: string) => boolean;
+  /** Observe only: programs don't log and request counters don't move. */
+  silent?: boolean;
 }
 
 export interface CreateOptions {
@@ -42,6 +44,11 @@ export interface CreateOptions {
   network?: string;
   workdir?: string;
   autoRemove: boolean;
+  labels?: Record<string, string>;
+  /** Extra networks to join (compose), each with DNS aliases. */
+  extraNetworks?: { name: string; aliases: string[] }[];
+  /** DNS aliases on the primary network. */
+  aliases?: string[];
 }
 
 const NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/;
@@ -156,7 +163,8 @@ export class DockerEngine {
     };
   }
 
-  private imageFs(image: Image): DirNode {
+  /** A fresh copy of an image's root filesystem. */
+  imageFsOf(image: Image): DirNode {
     if (image.fs) return cloneNode(image.fs);
     const cat = image.catalog ? findCatalog(image.catalog) : undefined;
     const tag = cat?.tags.find((t) => t.size === image.size) ?? cat?.tags[0];
@@ -239,7 +247,7 @@ export class DockerEngine {
     const network = this.findNetwork(netName);
     if (!network) throw new DockerError(`network ${netName} not found`, 125);
 
-    const fs = this.imageFs(image);
+    const fs = this.imageFsOf(image);
     const workdir = normalize(opts.workdir ?? image.config.workdir ?? '/');
     new Vfs(fs, ROOT).mkdir(workdir, { parents: true });
 
@@ -268,9 +276,15 @@ export class DockerEngine {
       listening: [],
       program: argv.join(' '),
       requests: 0,
+      labels: { ...(opts.labels ?? {}) },
     };
-    if (network.driver === 'bridge') c.networks[network.name] = { ip: this.allocateIp(network) };
+    if (network.driver === 'bridge') c.networks[network.name] = { ip: this.allocateIp(network), ...(opts.aliases ? { aliases: opts.aliases } : {}) };
     else c.networks[network.name] = { ip: '' };
+    for (const extra of opts.extraNetworks ?? []) {
+      const n = this.findNetwork(extra.name);
+      if (!n) throw new DockerError(`network ${extra.name} not found`, 125);
+      c.networks[n.name] = { ip: this.allocateIp(n), aliases: extra.aliases };
+    }
     for (const spec of opts.volumes) this.mount(c, spec);
     this.d.containers.push(c);
     return c;
@@ -413,6 +427,7 @@ export class DockerEngine {
       now: this.now,
       env: envMap(c.env),
       log: (stream, text) => {
+        if (this.hooks.silent) return;
         for (const line of text.match(/[^\n]*\n|[^\n]+$/g) ?? []) c.logs.push({ stream, text: line, time: this.now });
       },
       shell: () => (this.hooks.spawn ? this.hooks.spawn(this.containerState(c)) : null),
@@ -672,7 +687,7 @@ export class DockerEngine {
     const prog = this.program(c);
     if ('oci' in prog || !prog.http) return { kind: 'error', code: 52, message: 'Empty reply from server' };
     const res = prog.http(this.programCtx(c), path || '/', port);
-    c.requests++;
+    if (!this.hooks.silent) c.requests++;
     return res;
   }
 
@@ -692,7 +707,8 @@ export class DockerEngine {
         (c) =>
           c !== self &&
           Object.entries(c.networks).some(
-            ([net, { ip }]) => shared.includes(net) && (ip === req.host || (c.name === req.host && !this.findNetwork(net)?.builtin)),
+            ([net, { ip, aliases }]) =>
+              shared.includes(net) && (ip === req.host || ((c.name === req.host || aliases?.includes(req.host)) && !this.findNetwork(net)?.builtin)),
           ),
       );
       if (!target) return undefined;

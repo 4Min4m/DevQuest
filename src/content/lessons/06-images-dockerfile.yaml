@@ -1,0 +1,127 @@
+id: images-dockerfile
+title: Building images
+branch: images-dockerfile
+prerequisites: [docker-basics]
+theory: |
+  A **Dockerfile** is a recipe for an image. Each instruction adds a layer:
+
+  ```dockerfile
+  FROM python:3.12-slim        # start from an existing image
+  WORKDIR /app                 # cd (and create) /app for the next steps
+  COPY app.py .                # copy from the build context into the image
+  RUN pip install flask        # run a command at BUILD time
+  EXPOSE 8000                  # document the port the app uses
+  CMD ["python3", "app.py"]    # what the container runs at START time
+  ```
+
+  Build it with `docker build -t NAME:TAG .` where the final `.` is the **build context**: the
+  folder whose files `COPY` can see.
+
+  Edit files with **`nano FILE`**: **Ctrl+S** saves, **Ctrl+X** exits.
+
+  Classic mistakes: confusing `RUN` (build time) with `CMD` (run time), and `COPY` paths that are
+  relative to the build context, not to the Dockerfile's folder on your disk.
+missions:
+  - id: first-dockerfile
+    title: Your first Dockerfile
+    type: guided
+    prompt: |
+      `~/hello-api/app.py` is a tiny web service listening on port **8000**.
+
+      1. Write `~/hello-api/Dockerfile` that runs it on top of `python:3.12-slim`
+      2. Build it as **`hello-api:1.0`**
+      3. Run it as a container named **`api`**, reachable at **http://localhost:8000**
+    initialState:
+      files:
+        /home/student/hello-api/app.py: |
+          from http.server import HTTPServer, BaseHTTPRequestHandler
+
+          class Handler(BaseHTTPRequestHandler):
+              def do_GET(self):
+                  self.send_response(200)
+                  self.end_headers()
+                  self.wfile.write(b"Hello from my first image!")
+
+          print("listening on 8000")
+          HTTPServer(("", 8000), Handler).serve_forever()
+    hints:
+      - text: "`cd ~/hello-api && nano Dockerfile`. You need FROM, WORKDIR, COPY and CMD (EXPOSE is good practice)."
+        cost: 5
+      - text: |
+          A working Dockerfile:
+          ```
+          FROM python:3.12-slim
+          WORKDIR /app
+          COPY app.py .
+          EXPOSE 8000
+          CMD ["python3", "app.py"]
+          ```
+        cost: 10
+      - text: Then `docker build -t hello-api:1.0 .` and `docker run -d --name api -p 8000:8000 hello-api:1.0`.
+        cost: 10
+    validator:
+      checks:
+        - type: imageExists
+          ref: hello-api:1.0
+          message: An image tagged `hello-api:1.0`.
+        - type: containerRunning
+          name: api
+          image: hello-api:1.0
+          message: A running container named `api` from `hello-api:1.0`.
+        - type: httpResponds
+          url: http://localhost:8000
+          contains: Hello from my first image!
+          message: http://localhost:8000 should answer with the app's greeting.
+    xp: 50
+    par: 5
+    explain: |
+      `docker build` executed your recipe: start from the Python image, create `/app`, copy the
+      script in, and record `CMD` as the default command. Nothing ran your app at build time; it
+      only starts when a container is created with `docker run`. Tags like `:1.0` let you keep
+      several versions side by side (`docker images`).
+    solution:
+      - cd hello-api
+      - 'echo -e "FROM python:3.12-slim\nWORKDIR /app\nCOPY app.py .\nEXPOSE 8000\nCMD [\"python3\", \"app.py\"]" > Dockerfile'
+      - docker build -t hello-api:1.0 .
+      - docker run -d --name api -p 8000:8000 hello-api:1.0
+
+  - id: fix-the-build
+    title: Fix the broken build
+    type: free
+    prompt: |
+      The shop's static site in `~/shop` doesn't build any more. Fix the Dockerfile, build the
+      image as **`shop`**, and run it as a container named **`shop`** so the site is served at
+      **http://localhost:8081**.
+    initialState:
+      files:
+        /home/student/shop/Dockerfile: |
+          FROM nginx:alpine
+          COPPY website/ /usr/share/nginx/html/
+          EXPOSE 80
+        /home/student/shop/site/index.html: "<h1>Shop is open</h1>\n"
+    hints: []
+    validator:
+      checks:
+        - type: imageExists
+          ref: shop:latest
+          message: An image tagged `shop` (i.e. `shop:latest`).
+        - type: containerRunning
+          name: shop
+          image: shop
+          message: A running container named `shop` from your `shop` image.
+        - type: httpResponds
+          url: http://localhost:8081
+          contains: Shop is open
+          message: http://localhost:8081 should show the shop's page.
+    xp: 60
+    par: 5
+    explain: |
+      There were two bugs. `COPPY` isn't an instruction (a parse error, caught before anything
+      runs), and the folder is called `site/`, not `website/` (a "not found" error from the build
+      context). Note that `COPY site/ /usr/share/nginx/html/` copies the folder's **contents**, which
+      is exactly what nginx needs.
+    solution:
+      - cd shop
+      - 'echo -e "FROM nginx:alpine\nCOPY site/ /usr/share/nginx/html/\nEXPOSE 80" > Dockerfile'
+      - docker build -t shop .
+      - docker run -d --name shop -p 8081:80 shop

@@ -14,6 +14,8 @@ browser terminal. No backend, no runtime network calls. See [CLAUDE.md](CLAUDE.m
 - **Step 4 done:** simulated Docker engine — images, containers, ports, logs, exec (including
   interactive `exec -it` shells), volumes, bind mounts, networks with container DNS, inspect —
   plus a free-play Sandbox page.
+- **Step 5 done:** `docker build` (Dockerfile interpreter) and `docker compose`, a `nano` editor,
+  Docker validators, and 8 Docker missions + 3 boss fights (CrashLoop, port conflict, broken nginx config).
 
 ## Develop
 
@@ -36,7 +38,8 @@ src/sim/shell/              lexer/parser → AST, expansion ($VAR, ~, globs), ex
 src/sim/commands/linux/     one module per command group, each with tests
 src/sim/docker/             Docker engine: catalog (offline registry), programs (what runs in
                             containers: nginx, postgres, redis, python/node apps...), engine,
-                            cli/ (docker run, ps, exec, logs, volume, network, inspect...)
+                            build.ts (Dockerfile), compose.ts (Compose v2),
+                            cli/ (docker run, ps, exec, logs, build, compose, volume, network...)
 src/sim/net.ts              simulated HTTP for curl (containers register as providers)
 src/game/                   mission engine: initial-state builder, validators, MissionSession;
                             progress.ts (XP, levels, streak, hearts, unlocking, skill tree),
@@ -55,9 +58,9 @@ ps kill whoami id env export unset df du curl help history clear true false`
 
 `docker`: `run create ps start stop restart kill rm logs exec port inspect images pull rmi`,
 `volume create|ls|rm|inspect|prune`, `network create|ls|rm|inspect|connect|disconnect`,
-`container …` / `image …` aliases. Offline images: nginx, httpd, redis, postgres, mysql, alpine,
-busybox, ubuntu, node, python, hello-world, curlimages/curl. (`docker build` and `docker compose`
-arrive with their lessons in step 5.)
+`build`, `compose up|down|ps|logs|exec|build|start|stop|restart|config`, `container …` / `image …`
+aliases. Offline images: nginx, httpd, redis, postgres, mysql, alpine, busybox, ubuntu, node, python,
+hello-world, curlimages/curl. `nano FILE` (also `vi`/`vim`) opens a simple editor in the browser.
 
 Run `<command> --help` to see which options the simulator supports. Real commands that
 aren't simulated yet (e.g. `sed`, `vim`, `sudo`) say so explicitly instead of failing silently.
@@ -99,5 +102,10 @@ success, and optional **guards** (things that must stay true — breaking one is
 
 Check types: `fileExists`, `fileMissing`, `fileContains` (text / regex / equals), `fileMode`,
 `fileOwner`, `cwd`, `varEquals`, `processRunning`, `processAbsent`, `commandUsed`,
-`outputContains`, `anyOf`, `not`. The content QA test (`src/content/content.test.ts`) proves every
+`outputContains`, `anyOf`, `not`, and for Docker: `containerRunning`, `containerAbsent`,
+`containerPort`, `containerEnv`, `containerMount`, `containerNetwork`, `containerInspect`,
+`containerFile`, `imageExists`, `imageInspect`, `volumeExists`, `networkExists`, `httpResponds`.
+
+`initialState.setup` runs real shell commands (e.g. `docker run ...`) to build the starting
+machine, so boss fights can start from a genuinely broken system. The content QA test (`src/content/content.test.ts`) proves every
 mission starts unsolved and is solved by its `solution` without errors or broken guards.

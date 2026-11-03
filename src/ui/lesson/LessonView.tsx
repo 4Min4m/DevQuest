@@ -72,9 +72,8 @@ function MissionScreen({ lesson, missionIndex }: { lesson: Lesson; missionIndex:
     if (isLessonComplete(progressStore.getState().progress, lesson)) actions().refillHearts(lesson.id);
   }, [lesson, session]);
 
-  const execute = useCallback(
-    (line: string): RunResult => {
-      const { result, events } = session.run(line);
+  const handleEvents = useCallback(
+    (events: SessionEvent[]) => {
       lastEvents.current = events;
       for (const e of events) {
         if (e.type === 'passed') onPassed();
@@ -84,9 +83,17 @@ function MissionScreen({ lesson, missionIndex }: { lesson: Lesson; missionIndex:
         }
       }
       rerender();
+    },
+    [onPassed, penalize],
+  );
+
+  const execute = useCallback(
+    (line: string): RunResult => {
+      const { result, events } = session.run(line);
+      handleEvents(events);
       return result;
     },
-    [session, onPassed, penalize],
+    [session, handleEvents],
   );
 
   const onCommand = useCallback(() => {
@@ -143,7 +150,17 @@ function MissionScreen({ lesson, missionIndex }: { lesson: Lesson; missionIndex:
         nextLabel={next ? 'Next mission →' : 'Lesson complete — back to the skill tree'}
       />
       <main className="terminal-area">
-        <TerminalPane key={`${mission.id}-${attempt}`} shell={session.shell} banner={banner} execute={execute} onCommand={onCommand} />
+        <TerminalPane
+          key={`${mission.id}-${attempt}`}
+          shell={session.shell}
+          banner={banner}
+          execute={execute}
+          onCommand={onCommand}
+          onFileSaved={() => {
+            handleEvents(session.reevaluate());
+            return onCommand();
+          }}
+        />
       </main>
     </div>
   );

@@ -1,0 +1,104 @@
+id: volumes-networks
+title: Data and networking
+branch: volumes-networks
+prerequisites: [images-dockerfile]
+theory: |
+  **A container's filesystem dies with the container.** To keep data, mount storage into it:
+
+  - **named volume:** `-v pgdata:/var/lib/postgresql/data`, managed by Docker (`docker volume ls`)
+  - **bind mount:** `-v /home/student/site:/usr/share/nginx/html` (or `./site:...`), a folder from your machine
+
+  Careful: `-v site:/data` (no `/` or `./`) creates a **volume named `site`**, not your folder!
+
+  **Networking:** containers on the *default* bridge network can only reach each other by IP.
+  On a **user-defined network** Docker adds DNS, so containers find each other **by name**:
+
+  ```
+  docker network create backend
+  docker run -d --name api --network backend nginx
+  docker network connect backend some-other-container
+  ```
+  Inside the network, use the **container port** (e.g. `http://api:80`), not the published host port.
+missions:
+  - id: persist-db
+    title: Persist the database
+    type: guided
+    prompt: |
+      Run a **PostgreSQL** database container named **`db`** whose data survives the container
+      being deleted:
+
+      - store the data in a **named volume `pgdata`** mounted at `/var/lib/postgresql/data`
+      - postgres refuses to start without a superuser password: set `POSTGRES_PASSWORD`
+    initialState:
+      setup:
+        - docker pull postgres
+    hints:
+      - text: "`-e KEY=value` sets an environment variable, `-v NAME:/path` mounts a named volume."
+        cost: 5
+      - text: If it doesn't start, `docker logs db` tells you why.
+        cost: 5
+      - text: Run `docker run -d --name db -e POSTGRES_PASSWORD=devquest -v pgdata:/var/lib/postgresql/data postgres`.
+        cost: 10
+    validator:
+      checks:
+        - type: containerRunning
+          name: db
+          image: postgres
+          message: A running container named `db` from `postgres`.
+        - type: containerEnv
+          name: db
+          env: POSTGRES_PASSWORD
+          message: "`db` should have `POSTGRES_PASSWORD` set."
+        - type: containerMount
+          name: db
+          target: /var/lib/postgresql/data
+          source: pgdata
+          mountType: volume
+          message: "`db` should mount the named volume `pgdata` at `/var/lib/postgresql/data`."
+    xp: 40
+    par: 2
+    explain: |
+      The database files now live in the `pgdata` volume, not in the container. Try it: `docker rm -f db`,
+      then run a new container with the same `-v`. postgres says *"Database directory appears to contain a
+      database; Skipping initialization"*, so your data survived.
+    solution:
+      - docker run -d --name db -e POSTGRES_PASSWORD=devquest -v pgdata:/var/lib/postgresql/data postgres
+
+  - id: talk-by-name
+    title: Let the containers talk
+    type: free
+    prompt: |
+      The `api` container runs on the default network, where other containers can't find it by name.
+
+      1. Create a network called **`backend`** and attach **`api`** to it
+      2. Prove it works: from a **one-off container on `backend`**, fetch **`http://api`**
+         and see the nginx welcome page in your terminal
+
+      Tip: the `curlimages/curl` image is just `curl`, so arguments after the image name go to curl.
+    initialState:
+      setup:
+        - docker pull nginx
+        - docker pull curlimages/curl
+        - docker run -d --name api nginx
+    hints: []
+    validator:
+      checks:
+        - type: networkExists
+          name: backend
+        - type: containerNetwork
+          name: api
+          network: backend
+          message: "`api` should be connected to the `backend` network."
+        - type: outputContains
+          text: Welcome to nginx!
+          message: Fetch http://api from a container on `backend` and show the page.
+    xp: 50
+    par: 3
+    explain: |
+      User-defined networks come with an embedded DNS server, so `api` resolves to the container's IP.
+      On the default `bridge` network you'd get `Could not resolve host: api`. `docker network connect`
+      attaches a running container without restarting it, and `--rm` cleaned up the curl container.
+    solution:
+      - docker network create backend
+      - docker network connect backend api
+      - docker run --rm --network backend curlimages/curl -s http://api

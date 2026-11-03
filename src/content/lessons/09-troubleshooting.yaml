@@ -1,0 +1,158 @@
+id: troubleshooting
+title: Boss fights
+branch: troubleshooting
+prerequisites: [compose]
+theory: |
+  Real incidents don't come with instructions. A reliable loop:
+
+  1. **Observe:** `docker ps -a` (status, exit code, restarts), `curl` the service
+  2. **Read the evidence:** `docker logs NAME` almost always tells you what's wrong
+  3. **Inspect:** `docker inspect NAME`, `docker exec NAME ...`, the config files on disk
+  4. **Fix the cause**, not the symptom, then verify again
+
+  Useful exit codes: **0** clean exit, **1** app error, **125** docker itself failed,
+  **126/127** command not executable / not found, **137** killed (SIGKILL, often out of memory or a stop timeout).
+
+  Boss fights have **no hints**, and destructive mistakes cost hearts.
+missions:
+  - id: crashloop
+    title: CrashLoop at 3 AM
+    type: boss
+    prompt: |
+      🚨 **PAGE:** *"db is flapping, the app can't connect!"*
+
+      Get the **`db`** container running again. Constraints:
+
+      - keep the container name `db` and the restart policy `always`
+      - keep using the existing **`pgdata`** volume (it holds production data!)
+    initialState:
+      setup:
+        - docker pull postgres
+        - docker volume create pgdata
+        - docker run -d --name db --restart always -v pgdata:/var/lib/postgresql/data postgres
+    hints: []
+    validator:
+      checks:
+        - type: containerRunning
+          name: db
+          image: postgres
+          message: "`db` should be up (not restarting)."
+        - type: containerMount
+          name: db
+          target: /var/lib/postgresql/data
+          source: pgdata
+          message: "`db` must keep using the `pgdata` volume."
+        - type: containerInspect
+          name: db
+          path: HostConfig.RestartPolicy.Name
+          equals: always
+          message: "`db` should keep the restart policy `always`."
+      guards:
+        - type: volumeExists
+          name: pgdata
+          message: You deleted the `pgdata` volume. The production data is gone!
+    xp: 100
+    par: 4
+    explain: |
+      `docker ps` showed **Restarting (1)**, and `docker logs db` said why: postgres won't initialize
+      without `POSTGRES_PASSWORD`. A restart policy can't fix a configuration error; it just
+      crash-loops. You can't add env vars to an existing container, so you recreate it (`docker rm -f`,
+      then `docker run` with `-e`). The data stays safe in the volume.
+    solution:
+      - docker logs db
+      - docker rm -f db
+      - docker run -d --name db --restart always -e POSTGRES_PASSWORD=s3cret -v pgdata:/var/lib/postgresql/data postgres
+
+  - id: port-conflict
+    title: Port already allocated
+    type: boss
+    prompt: |
+      🚨 The new website deploy "succeeded", but **http://localhost:8080 still shows the old site**.
+
+      Make the container **`site`** serve the new site (from `~/newsite`) on **port 8080**.
+      The `legacy` container is retired.
+    initialState:
+      files:
+        /home/student/newsite/index.html: "<h1>New site</h1>\n"
+      setup:
+        - docker pull nginx
+        - docker run -d --name legacy -p 8080:80 nginx
+        - docker run -d --name site -p 8080:80 -v /home/student/newsite:/usr/share/nginx/html nginx || true
+    hints: []
+    validator:
+      checks:
+        - type: containerRunning
+          name: site
+          message: "`site` should be running."
+        - type: httpResponds
+          url: http://localhost:8080
+          contains: New site
+          message: http://localhost:8080 should serve the new site.
+    xp: 100
+    par: 3
+    explain: |
+      Only one container can bind a host port. `site` was **created** but never started (`docker ps -a`
+      shows *Created*), because `legacy` still held 8080: *"port is already allocated"*. Removing
+      `legacy` freed the port, and `docker start site` started the existing container with its original
+      settings. No need to retype the whole `docker run`.
+    solution:
+      - docker ps -a
+      - docker rm -f legacy
+      - docker start site
+
+  - id: broken-config
+    title: The proxy that won't stay up
+    type: boss
+    prompt: |
+      🚨 The `web` container keeps dying and **http://localhost:8080** is down.
+
+      Its nginx config is mounted from **`~/proxy/default.conf`** on your machine. Fix the config
+      so that `web` serves the default nginx welcome page on **http://localhost:8080**.
+      Keep the same container (same port mapping and mount); fix the cause.
+    initialState:
+      files:
+        /home/student/proxy/default.conf: |
+          server {
+              listen       8081;
+              server_name  localhost;
+
+              location / {
+                  root   /usr/share/nginx/html
+                  index  index.html;
+              }
+          }
+      setup:
+        - docker pull nginx
+        - docker run -d --name web -p 8080:80 -v /home/student/proxy:/etc/nginx/conf.d nginx
+    hints: []
+    validator:
+      checks:
+        - type: containerRunning
+          name: web
+          message: "`web` should be running."
+        - type: containerPort
+          name: web
+          hostPort: 8080
+          containerPort: 80
+          message: "`web` should keep its `-p 8080:80` mapping."
+        - type: containerMount
+          name: web
+          target: /etc/nginx/conf.d
+          source: /home/student/proxy
+          message: "`web` should keep mounting `~/proxy` at `/etc/nginx/conf.d`."
+        - type: httpResponds
+          url: http://localhost:8080
+          contains: Welcome to nginx!
+          message: http://localhost:8080 should serve the nginx welcome page.
+    xp: 120
+    par: 5
+    explain: |
+      Two bugs. First, a missing `;` after `root /usr/share/nginx/html` glued it to the next line, so
+      nginx refused to start: `invalid number of arguments in "root" directive` (see `docker logs web`).
+      Second, even after fixing that, `listen 8081` wouldn't match the `-p 8080:80` mapping, so the
+      connection would be reset. Docker forwards to container port **80**, so nginx must listen there.
+      Because the config is a bind mount, editing the host file and restarting the container was enough.
+    solution:
+      - docker logs web
+      - 'echo -e "server {\n    listen 80;\n    location / {\n        root /usr/share/nginx/html;\n        index index.html;\n    }\n}" > proxy/default.conf'
+      - docker start web

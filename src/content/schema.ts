@@ -53,6 +53,39 @@ function checkCheck(c: unknown, where: string, p: Problems): void {
     case 'outputContains':
       if (c.text === undefined && c.regex === undefined) p.add(where, 'outputContains needs text or regex');
       break;
+    case 'containerAbsent':
+    case 'containerEnv':
+    case 'containerMount':
+    case 'containerNetwork':
+    case 'containerInspect':
+    case 'containerFile':
+    case 'containerPort':
+      needs('name');
+      if (c.type === 'containerEnv') needs('env');
+      if (c.type === 'containerMount') needs('target');
+      if (c.type === 'containerNetwork') needs('network');
+      if (c.type === 'containerInspect') {
+        needs('path');
+        if (typeof c.equals !== 'string') p.add(where, 'containerInspect needs a string "equals"');
+      }
+      if (c.type === 'containerFile') needs('path');
+      if (c.type === 'containerPort' && typeof c.hostPort !== 'number') p.add(where, 'containerPort needs a numeric hostPort');
+      break;
+    case 'containerRunning':
+      if (!isStr(c.name) && !isStr(c.image)) p.add(where, 'containerRunning needs name or image');
+      break;
+    case 'imageExists':
+    case 'imageInspect':
+      needs('ref');
+      if (c.type === 'imageInspect') needs('path');
+      break;
+    case 'volumeExists':
+    case 'networkExists':
+      needs('name');
+      break;
+    case 'httpResponds':
+      needs('url');
+      break;
     case 'anyOf':
       if (!Array.isArray(c.checks) || !c.checks.length) p.add(where, 'anyOf needs checks');
       else c.checks.forEach((x, i) => checkCheck(x, `${where}.checks[${i}]`, p));

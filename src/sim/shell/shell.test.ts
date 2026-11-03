@@ -15,9 +15,9 @@ describe('shell execution', () => {
 
   it('explains real-but-unsimulated commands', () => {
     const t = makeShell();
-    const r = t.run('vim notes.txt');
+    const r = t.run('sed -n 1p notes.txt');
     expect(r.code).toBe(127);
-    expect(r.err).toMatch(/'vim' is a real command, but it is not available in this simulator/);
+    expect(r.err).toMatch(/'sed' is a real command, but it is not available in this simulator/);
   });
 
   it('handles paths as commands', () => {

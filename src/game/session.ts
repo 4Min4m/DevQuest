@@ -52,7 +52,16 @@ export class MissionSession {
     this.outputs.push(result.output.filter((c) => c.stream === 'stdout').map((c) => c.text).join(''));
     if (this.status !== 'active') return { result, events };
     this.commands++;
+    return { result, events: this.evaluate() };
+  }
 
+  /** Re-check the mission without a command (e.g. after saving a file in the editor). */
+  reevaluate(): SessionEvent[] {
+    return this.status === 'active' ? this.evaluate() : [];
+  }
+
+  private evaluate(): SessionEvent[] {
+    const events: SessionEvent[] = [];
     const broken = brokenGuards(this.mission.validator, this.ctx());
     for (const g of broken) {
       const key = JSON.stringify(g.check);
@@ -61,7 +70,6 @@ export class MissionSession {
       this.brokenGuardList.push(g);
       events.push({ type: 'guardBroken', result: g });
     }
-
     // A broken guard (e.g. the web server you were told to keep) blocks success until reset.
     const v = validate(this.mission.validator, this.ctx());
     if (v.passed && broken.length === 0) {
@@ -69,7 +77,7 @@ export class MissionSession {
       this.lastValidation = v;
       events.push({ type: 'passed' });
     }
-    return { result, events };
+    return events;
   }
 
   /** Explicit "Check" button: a failed check counts as a mistake. Broken guards are reported too. */

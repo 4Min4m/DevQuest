@@ -33,9 +33,22 @@ export interface CommandContext {
   shell: ShellApi;
 }
 
+/** Ask the UI to open a text editor (nano). */
+export interface EditRequest {
+  /** Path as the user typed it (shown in the editor title). */
+  display: string;
+  content: string;
+  /** Which editor the user asked for (nano, vi, vim). */
+  editor: string;
+  /** Write the new content; returns an error message (nano style) or null on success. */
+  save(text: string): string | null;
+}
+
 export interface ShellApi {
   listCommands(): CommandDef[];
   requestClear(): void;
+  /** Open an editor in the UI once the command finishes. */
+  edit(req: EditRequest): void;
   /** A separate shell over another machine state (e.g. a container), sharing the command set. */
   spawn(state: SimState): ShellLike;
   /**
@@ -62,4 +75,6 @@ export interface RunResult {
   exitCode: number;
   /** Set by `clear`: the UI should wipe the screen. */
   clear: boolean;
+  /** Set by `nano`: the UI should open an editor. */
+  edit?: EditRequest;
 }

@@ -7,10 +7,10 @@ export { DockerEngine, DockerError } from './engine';
 export type * from './types';
 
 /** Let curl reach published container ports and (inside containers) other containers. */
-registerHttpProvider((state, req) => {
+registerHttpProvider((state, req, opts) => {
   const host = state.context?.host ?? state;
   if (!host.docker) return undefined;
-  return new DockerEngine(host).http(state, req);
+  return new DockerEngine(host, { silent: opts.silent }).http(state, req);
 });
 
 export const dockerCommands = [docker];

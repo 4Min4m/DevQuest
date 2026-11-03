@@ -79,8 +79,10 @@ export interface Container {
   ports: PortBinding[];
   exposedPorts: string[];
   mounts: Mount[];
-  /** Networks the container is attached to, with its IP on each. */
-  networks: Record<string, { ip: string }>;
+  /** Networks the container is attached to, with its IP (and DNS aliases) on each. */
+  networks: Record<string, { ip: string; aliases?: string[] }>;
+  /** e.g. com.docker.compose.project / .service */
+  labels: Record<string, string>;
   autoRemove: boolean;
   logs: LogLine[];
   /** The container's own filesystem (mounted directories are spliced in by reference). */

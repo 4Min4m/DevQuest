@@ -9,7 +9,7 @@ import { ExpandContext, expandWord } from './expand';
 import type { GlobFs } from './glob';
 import { homeOf, identityOf } from './identity';
 import { parse, ParseError } from './parser';
-import type { CommandContext, CommandDef, OutputChunk, RunResult, ShellApi, Stream } from './types';
+import type { CommandContext, CommandDef, EditRequest, OutputChunk, RunResult, ShellApi, Stream } from './types';
 
 /** Where a file descriptor's bytes end up. */
 type Sink =
@@ -20,7 +20,7 @@ type Sink =
 
 /** Real commands we deliberately don't simulate (yet): say so instead of "not found". */
 const NOT_SIMULATED = new Set([
-  'sed', 'awk', 'vi', 'vim', 'nano', 'less', 'more', 'sudo', 'su', 'apt', 'apt-get', 'yum',
+  'sed', 'awk', 'less', 'more', 'sudo', 'su', 'apt', 'apt-get', 'yum',
   'systemctl', 'journalctl', 'ssh', 'scp', 'wget', 'tar', 'gzip', 'ln', 'stat', 'file', 'top',
   'htop', 'tr', 'cut', 'xargs', 'tee', 'diff', 'which', 'man', 'ping', 'ip', 'ss', 'netstat',
   'lsof', 'free', 'uptime', 'date', 'git', 'python', 'python3', 'node', 'make', 'bash', 'sh',
@@ -38,6 +38,7 @@ export class Shell {
   private readonly commands = new Map<string, CommandDef>();
   private output: OutputChunk[] = [];
   private clearRequested = false;
+  private editRequest: EditRequest | undefined;
   /** Interactive nested shell (docker exec -it) that currently owns the terminal. */
   private nested: { shell: Shell; onExit: (code: number) => void } | null = null;
 
@@ -90,6 +91,7 @@ export class Shell {
     if (this.nested) return this.runNested(line);
     this.output = [];
     this.clearRequested = false;
+    this.editRequest = undefined;
     const state = this.state;
     if (line.trim()) state.history.push(line);
     state.clock += 1000;
@@ -132,7 +134,9 @@ export class Shell {
   }
 
   private result(): RunResult {
-    return { output: this.output, exitCode: this.state.lastExit, clear: this.clearRequested };
+    const r: RunResult = { output: this.output, exitCode: this.state.lastExit, clear: this.clearRequested };
+    if (this.editRequest) r.edit = this.editRequest;
+    return r;
   }
 
   private emit(stream: Stream, text: string, note = false): void {
@@ -248,6 +252,9 @@ export class Shell {
         listCommands: () => this.commandNames().map((n) => this.commands.get(n)!),
         requestClear: () => {
           this.clearRequested = true;
+        },
+        edit: (req) => {
+          this.editRequest = req;
         },
         spawn: (s) => this.spawn(s),
         attach: (s, onExit) => {

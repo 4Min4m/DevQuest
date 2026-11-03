@@ -85,6 +85,26 @@ export type Check = CheckBase &
     | { type: 'outputContains'; text?: string; regex?: string }
     | { type: 'anyOf'; checks: Check[] }
     | { type: 'not'; check: Check }
+    // ---- Docker
+    /** A running container, matched by name and/or image reference. */
+    | { type: 'containerRunning'; name?: string; image?: string }
+    | { type: 'containerAbsent'; name: string }
+    /** Running container `name` publishes hostPort (optionally → containerPort). */
+    | { type: 'containerPort'; name: string; hostPort: number; containerPort?: number }
+    /** `KEY=VALUE`, or just `KEY` to require that it is set. */
+    | { type: 'containerEnv'; name: string; env: string }
+    | { type: 'containerMount'; name: string; target: string; source?: string; mountType?: 'volume' | 'bind' }
+    | { type: 'containerNetwork'; name: string; network: string }
+    /** Compare a `docker inspect` field (dotted path) to a value. */
+    | { type: 'containerInspect'; name: string; path: string; equals: string }
+    /** A file inside a container's filesystem. */
+    | { type: 'containerFile'; name: string; path: string; text?: string; regex?: string }
+    | { type: 'imageExists'; ref: string }
+    | { type: 'imageInspect'; ref: string; path: string; equals: string }
+    | { type: 'volumeExists'; name: string }
+    | { type: 'networkExists'; name: string }
+    /** A request from the host (like curl) succeeds, optionally containing text / with a status. */
+    | { type: 'httpResponds'; url: string; contains?: string; status?: number }
   );
 
 export type CheckType = Check['type'];
@@ -113,4 +133,12 @@ export interface InitialStateSpec {
   /** Extra processes. Missing fields get sensible defaults. */
   processes?: (Partial<Process> & { pid: number; command: string })[];
   network?: Record<string, HttpResponse>;
+  /**
+   * Shell commands run (as the learner) after files are created — e.g. `docker run ...`
+   * to start from a pre-built or deliberately broken setup. Each must exit 0
+   * (append `|| true` for commands that are meant to fail).
+   */
+  setup?: string[];
+  /** Simulated seconds that pass after setup (so containers look "Up 5 minutes"). Default 300. */
+  setupAge?: number;
 }

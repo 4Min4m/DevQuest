@@ -243,6 +243,12 @@ export const CATALOG: CatalogImage[] = [
   },
 ];
 
+// Container images don't ship editors (busybox-based ones have vi).
+for (const c of CATALOG) {
+  c.lacks.push('nano', 'vim');
+  if (c.repository !== 'alpine' && c.repository !== 'busybox' && c.repository !== 'curlimages/curl') c.lacks.push('vi');
+}
+
 /** Split "repo:tag" (accepting docker.io/library/ prefixes). */
 export function parseRef(ref: string): { repository: string; tag: string } {
   let r = ref.replace(/^docker\.io\//, '').replace(/^library\//, '');

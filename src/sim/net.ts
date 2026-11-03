@@ -16,7 +16,12 @@ export interface Request {
 
 export type HttpResult = { kind: 'response'; res: HttpResponse } | { kind: 'error'; code: number; message: string };
 
-export type HttpProvider = (state: SimState, req: Request) => HttpResult | undefined;
+export interface RequestOptions {
+  /** Probe without side effects (no access-log lines) — used by mission validators. */
+  silent?: boolean;
+}
+
+export type HttpProvider = (state: SimState, req: Request, opts: RequestOptions) => HttpResult | undefined;
 
 const providers: HttpProvider[] = [];
 
@@ -40,9 +45,9 @@ export function parseUrl(raw: string, method = 'GET'): Request | null {
 }
 
 /** Resolve a request: dynamic providers first, then static endpoints, then connection errors. */
-export function httpRequest(state: SimState, req: Request): HttpResult {
+export function httpRequest(state: SimState, req: Request, opts: RequestOptions = {}): HttpResult {
   for (const p of providers) {
-    const r = p(state, req);
+    const r = p(state, req, opts);
     if (r) return r;
   }
   const res = state.network[req.key] ?? state.network[req.key + '/'];

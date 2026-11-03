@@ -77,7 +77,7 @@ export function containerJson(engine: DockerEngine, c: Container): Record<string
   };
 }
 
-function imageJson(i: Image): Record<string, unknown> {
+export function imageJson(i: Image): Record<string, unknown> {
   return {
     Id: `sha256:${i.id}`,
     RepoTags: [`${i.repository}:${i.tag}`],

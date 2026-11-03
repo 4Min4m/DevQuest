@@ -35,7 +35,7 @@ describe('daemon access', () => {
     expect(t.run('docker').out).toContain('Usage:  docker [OPTIONS] COMMAND');
     expect(t.run('docker --version').out).toBe('Docker version 27.3.1, build ce12230\n');
     expect(t.run('docker frob')).toMatchObject({ err: "docker: 'frob' is not a docker command.\nSee 'docker --help'\n", code: 1 });
-    expect(t.run('docker build .').err).toMatch(/arrives with the Images & Dockerfile lessons/);
+    expect(t.run('docker push x').err).toMatch(/is not simulated/);
     expect(t.run('docker ps --bogus')).toMatchObject({ err: "unknown flag: --bogus\nSee 'docker ps --help'.\n", code: 125 });
     expect(t.run('docker stop')).toMatchObject({
       err: `"docker stop" requires at least 1 argument.\nSee 'docker stop --help'.\n\nUsage:  docker stop [OPTIONS] CONTAINER [CONTAINER...]\n`,

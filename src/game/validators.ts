@@ -1,3 +1,7 @@
+import { containerJson, imageJson } from '../sim/docker/cli/objects';
+import { DockerEngine } from '../sim/docker/engine';
+import type { Container } from '../sim/docker/types';
+import { httpRequest, parseUrl } from '../sim/net';
 import type { SimState } from '../sim/state';
 import { normalize } from '../sim/vfs/path';
 import type { FsNode } from '../sim/vfs/types';
@@ -65,7 +69,61 @@ export function describe(check: Check): string {
       return check.checks.map(describe).join(', or ');
     case 'not':
       return `not: ${describe(check.check)}`;
+    case 'containerRunning':
+      return `a container${check.name ? ` named \`${check.name}\`` : ''}${check.image ? ` from image \`${check.image}\`` : ''} should be running`;
+    case 'containerAbsent':
+      return `container \`${check.name}\` should be removed`;
+    case 'containerPort':
+      return `container \`${check.name}\` should publish port ${check.hostPort}${check.containerPort ? ` → ${check.containerPort}` : ''}`;
+    case 'containerEnv':
+      return `container \`${check.name}\` should have \`${check.env}\` in its environment`;
+    case 'containerMount':
+      return `container \`${check.name}\` should mount ${check.source ? `\`${check.source}\`` : 'something'} at \`${check.target}\``;
+    case 'containerNetwork':
+      return `container \`${check.name}\` should be on network \`${check.network}\``;
+    case 'containerInspect':
+      return `container \`${check.name}\`: ${check.path} should be \`${check.equals}\``;
+    case 'containerFile':
+      return `\`${check.path}\` inside container \`${check.name}\` should have the expected content`;
+    case 'imageExists':
+      return `image \`${check.ref}\` should exist`;
+    case 'imageInspect':
+      return `image \`${check.ref}\`: ${check.path} should be \`${check.equals}\``;
+    case 'volumeExists':
+      return `volume \`${check.name}\` should exist`;
+    case 'networkExists':
+      return `network \`${check.name}\` should exist`;
+    case 'httpResponds':
+      return `${check.url} should respond${check.contains ? ` with \`${check.contains}\`` : ''}`;
   }
+}
+
+function engineOf(state: SimState): DockerEngine | null {
+  return state.docker ? new DockerEngine(state, { silent: true }) : null;
+}
+
+function container(state: SimState, name: string): Container | undefined {
+  try {
+    return engineOf(state)?.findContainer(name);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Read a dotted path ("State.Status") out of inspect JSON. */
+function pathValue(obj: unknown, path: string): string {
+  let cur: unknown = obj;
+  for (const k of path.split('.')) {
+    if (cur === null || typeof cur !== 'object') return '';
+    cur = (cur as Record<string, unknown>)[k];
+  }
+  return typeof cur === 'object' ? JSON.stringify(cur) : String(cur ?? '');
+}
+
+function imageMatches(c: Container, ref: string): boolean {
+  const withTag = ref.includes(':') ? ref : `${ref}:latest`;
+  const img = c.image.includes(':') ? c.image : `${c.image}:latest`;
+  return img === withTag;
 }
 
 function evaluate(check: Check, ctx: ValidationContext): boolean {
@@ -118,6 +176,70 @@ function evaluate(check: Check, ctx: ValidationContext): boolean {
       return check.checks.some((c) => evaluate(c, ctx));
     case 'not':
       return !evaluate(check.check, ctx);
+    case 'containerRunning':
+      return (state.docker?.containers ?? []).some(
+        (c) => c.status === 'running' && (!check.name || c.name === check.name) && (!check.image || imageMatches(c, check.image)),
+      );
+    case 'containerAbsent':
+      return !(state.docker?.containers ?? []).some((c) => c.name === check.name);
+    case 'containerPort': {
+      const c = container(state, check.name);
+      return (
+        !!c &&
+        c.status === 'running' &&
+        c.ports.some((p) => p.hostPort === check.hostPort && (check.containerPort === undefined || p.containerPort === check.containerPort))
+      );
+    }
+    case 'containerEnv': {
+      const c = container(state, check.name);
+      if (!c) return false;
+      return check.env.includes('=') ? c.env.includes(check.env) : c.env.some((e) => e.startsWith(check.env + '='));
+    }
+    case 'containerMount': {
+      const c = container(state, check.name);
+      return !!c?.mounts.some(
+        (m) => m.target === check.target && (!check.source || m.source === check.source) && (!check.mountType || m.type === check.mountType),
+      );
+    }
+    case 'containerNetwork': {
+      const c = container(state, check.name);
+      return !!c && check.network in c.networks;
+    }
+    case 'containerInspect': {
+      const e = engineOf(state);
+      const c = container(state, check.name);
+      return !!e && !!c && pathValue(containerJson(e, c), check.path) === check.equals;
+    }
+    case 'containerFile': {
+      const c = container(state, check.name);
+      if (!c) return false;
+      try {
+        const content = new Vfs(c.fs, { name: 'root', groups: ['root'] }).readFile(normalize(check.path));
+        if (check.text !== undefined && !content.includes(check.text)) return false;
+        if (check.regex !== undefined && !new RegExp(check.regex).test(content)) return false;
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    case 'imageExists':
+      return !!engineOf(state)?.findImage(check.ref);
+    case 'imageInspect': {
+      const img = engineOf(state)?.findImage(check.ref);
+      return !!img && pathValue(imageJson(img), check.path) === check.equals;
+    }
+    case 'volumeExists':
+      return !!engineOf(state)?.findVolume(check.name);
+    case 'networkExists':
+      return !!engineOf(state)?.findNetwork(check.name);
+    case 'httpResponds': {
+      const req = parseUrl(check.url);
+      if (!req) return false;
+      const r = httpRequest(state, req, { silent: true });
+      if (r.kind !== 'response') return false;
+      if (check.status !== undefined ? r.res.status !== check.status : r.res.status >= 400) return false;
+      return check.contains === undefined || r.res.body.includes(check.contains);
+    }
   }
 }
 
@@ -138,4 +260,6 @@ export function brokenGuards(validator: Validator, ctx: ValidationContext): Chec
 export const CHECK_TYPES: readonly Check['type'][] = [
   'fileExists', 'fileMissing', 'fileContains', 'fileMode', 'fileOwner', 'cwd', 'varEquals',
   'processRunning', 'processAbsent', 'commandUsed', 'outputContains', 'anyOf', 'not',
+  'containerRunning', 'containerAbsent', 'containerPort', 'containerEnv', 'containerMount', 'containerNetwork',
+  'containerInspect', 'containerFile', 'imageExists', 'imageInspect', 'volumeExists', 'networkExists', 'httpResponds',
 ];

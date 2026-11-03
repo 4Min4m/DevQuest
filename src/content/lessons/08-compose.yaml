@@ -1,0 +1,98 @@
+id: compose
+title: Docker Compose
+branch: compose
+prerequisites: [volumes-networks]
+theory: |
+  Typing long `docker run` commands for every service gets old fast. **Compose** describes a
+  whole application in one file, `compose.yaml`:
+
+  ```yaml
+  services:
+    web:
+      image: nginx
+      ports:
+        - "8080:80"
+      depends_on:
+        - cache
+    cache:
+      image: redis
+  ```
+
+  | Command | What it does |
+  |---|---|
+  | `docker compose up -d` | create the network, then start every service (in dependency order) |
+  | `docker compose ps` | the project's containers |
+  | `docker compose logs web` | one service's logs |
+  | `docker compose down` | stop and remove containers and the network (`-v` also removes volumes) |
+
+  Compose names things after the **project** (the folder name): containers are `stack-web-1`,
+  the network is `stack_default`, and services reach each other by **service name** (`cache:6379`).
+  YAML is indentation-sensitive: use spaces, never tabs.
+missions:
+  - id: compose-stack
+    title: Compose a two-service app
+    type: guided
+    prompt: |
+      `~/stack/compose.yaml` only describes the `web` service. Add a second service:
+
+      - **`cache`**, using the **`redis`** image
+      - make `web` **depend on** `cache`
+
+      Then start the whole stack in the background, with `web` still on **http://localhost:8080**.
+    initialState:
+      files:
+        /home/student/stack/compose.yaml: |
+          services:
+            web:
+              image: nginx
+              ports:
+                - "8080:80"
+      setup:
+        - docker pull nginx
+        - docker pull redis
+    hints:
+      - text: "`cd ~/stack && nano compose.yaml`. A new service sits next to `web:` under `services:`, at the same indentation."
+        cost: 5
+      - text: |
+          The finished file:
+          ```yaml
+          services:
+            web:
+              image: nginx
+              ports:
+                - "8080:80"
+              depends_on:
+                - cache
+            cache:
+              image: redis
+          ```
+        cost: 10
+      - text: Then run `docker compose up -d`.
+        cost: 5
+    validator:
+      checks:
+        - type: containerRunning
+          name: stack-cache-1
+          image: redis
+          message: The `cache` service (container `stack-cache-1`) should be running redis.
+        - type: containerRunning
+          name: stack-web-1
+          message: The `web` service (container `stack-web-1`) should be running.
+        - type: fileContains
+          path: /home/student/stack/compose.yaml
+          regex: 'depends_on:\s*\n?\s*(-\s*)?\[?\s*cache'
+          message: "`web` should declare `depends_on: [cache]` in compose.yaml."
+        - type: httpResponds
+          url: http://localhost:8080
+          contains: Welcome to nginx!
+          message: http://localhost:8080 should still serve nginx.
+    xp: 50
+    par: 3
+    explain: |
+      Compose created the `stack_default` network, started `cache` first because `web` depends on it,
+      and named the containers after the project folder. Inside the network, nginx could reach redis
+      at `cache:6379`. `depends_on` only orders startup; it doesn't wait for redis to be *ready*.
+    solution:
+      - cd stack
+      - 'echo -e "services:\n  web:\n    image: nginx\n    ports:\n      - \"8080:80\"\n    depends_on:\n      - cache\n  cache:\n    image: redis" > compose.yaml'
+      - docker compose up -d

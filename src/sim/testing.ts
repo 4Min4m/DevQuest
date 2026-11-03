@@ -15,7 +15,7 @@ export interface TestShell {
   shell: Shell;
   state: SimState;
   run(line: string): Run;
-  /** Run several lines, failing loudly if any of them writes to stderr. */
+  /** Run several lines, failing loudly if any exits non-zero or prints an error. */
   setup(...lines: string[]): void;
   vfs(): Vfs;
   read(path: string): string;
@@ -39,8 +39,10 @@ export function makeShell(overrides: Partial<SimState> = {}): TestShell {
     run,
     setup(...lines) {
       for (const l of lines) {
-        const r = run(l);
-        if (r.err || r.code !== 0) throw new Error(`setup failed: ${l}\n${r.err}`);
+        const r = shell.run(l);
+        // Informational stderr (progress notes) is fine; real errors are not.
+        const err = r.output.filter((c) => c.stream === 'stderr' && !c.note).map((c) => c.text).join('');
+        if (err || r.exitCode !== 0) throw new Error(`setup failed: ${l}\n${err}`);
       }
     },
     vfs,

@@ -213,3 +213,33 @@ describe('curl flag handling', () => {
     expect(t.run('curl --help').out).toMatch(/^Usage: curl/);
   });
 });
+
+describe('nano / vi / vim', () => {
+  it('opens an edit request and saves through the VFS with permissions', () => {
+    const t = makeShell();
+    const r = t.shell.run('nano notes.txt');
+    expect(r.exitCode).toBe(0);
+    expect(r.edit).toMatchObject({ display: 'notes.txt', editor: 'nano' });
+    expect(r.edit!.content).toContain('Welcome');
+    expect(r.edit!.save('changed\n')).toBeNull();
+    expect(t.read('/home/student/notes.txt')).toBe('changed\n');
+    const fresh = t.shell.run('vim new.txt').edit!;
+    expect(fresh.content).toBe('');
+    expect(fresh.editor).toBe('vim');
+    fresh.save('x');
+    expect(t.read('/home/student/new.txt')).toBe('x');
+    expect(t.shell.run('nano /etc/hostname').edit!.save('hacked')).toBe('[ Error writing /etc/hostname: Permission denied ]');
+  });
+  it('errors', () => {
+    const t = makeShell();
+    expect(t.run('nano')).toMatchObject({ err: 'devquest: usage: nano FILE  (the simple editor opens one file at a time)\n', code: 1 });
+    expect(t.run('nano projects').err).toBe('nano: projects: Is a directory\n');
+    expect(t.run('nano nodir/x').err).toBe('nano: nodir/x: No such file or directory (parent directory missing)\n');
+    expect(t.run('nano /var/log/syslog').err).toBe('nano: /var/log/syslog: Permission denied\n');
+  });
+  it('containers do not ship editors (except busybox vi)', () => {
+    const t = makeShell();
+    t.setup('docker pull nginx', 'docker run -d --name web nginx');
+    expect(t.run('docker exec web nano /etc/hosts').code).toBe(126);
+  });
+});

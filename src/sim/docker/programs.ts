@@ -127,6 +127,11 @@ export function nginxConfig(c: Container): { ports: number[]; root: string } | {
       if (ch === '\n') line++;
       if (ch === ';') {
         const words = stmt.trim().split(/\s+/);
+        // A missing ';' glues two directives together — nginx then sees too many arguments.
+        const ARITY: Record<string, number> = { root: 2, worker_processes: 2, user: 3 };
+        if (ARITY[words[0]] !== undefined && words.length > ARITY[words[0]]) {
+          return { error: `[emerg] 1#1: invalid number of arguments in "${words[0]}" directive in ${file}:${line}` };
+        }
         if (words[0] === 'listen') {
           const port = /(?:^|:)(\d+)$/.exec(words[1] ?? '');
           if (port && !ports.includes(Number(port[1]))) ports.push(Number(port[1]));
@@ -486,7 +491,14 @@ export function resolveProgram(
     case 'dash': {
       if (!shells.includes(base)) return { oci: exe };
       const c = rest.indexOf('-c');
-      return c >= 0 && rest[c + 1] !== undefined ? runOnce(rest[c + 1]) : shellNoInput;
+      if (c < 0 || rest[c + 1] === undefined) return shellNoInput;
+      const script = rest[c + 1].trim().replace(/^exec\s+/, '');
+      // Shell-form CMD ("python app.py") is just a wrapper around one program.
+      if (/^[\w./=:@ -]+$/.test(script) && !/[;&|<>]/.test(script)) {
+        const inner = resolveProgram(script.split(/\s+/), hasCommand, hasFile, shells);
+        if (!('oci' in inner)) return inner;
+      }
+      return runOnce(rest[c + 1]);
     }
     case 'python':
     case 'python3': {

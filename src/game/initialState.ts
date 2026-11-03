@@ -1,3 +1,4 @@
+import { createShell } from '../sim';
 import { identityOf } from '../sim/shell/identity';
 import { createInitialState, Process, SimState } from '../sim/state';
 import { dirname, isWithin, normalize, splitPath } from '../sim/vfs/path';
@@ -83,6 +84,25 @@ export function buildInitialState(spec: InitialStateSpec = {}): SimState {
   }
 
   Object.assign(state.network, spec.network ?? {});
+
+  if (spec.setup?.length) {
+    const shell = createShell(state);
+    for (const line of spec.setup) {
+      const r = shell.run(line);
+      if (r.exitCode !== 0) {
+        const out = r.output.map((c) => c.text).join('');
+        throw new Error(`initialState: setup command failed (exit ${r.exitCode}): ${line}\n${out}`);
+      }
+    }
+    // The learner starts with a clean slate: setup isn't part of their history.
+    state.history = [];
+    state.commandLog = [];
+    state.lastExit = 0;
+    state.clock += (spec.setupAge ?? 300) * 1000;
+    state.cwd = spec.cwd ? normalize(spec.cwd) : state.vars.HOME;
+    state.vars.PWD = state.cwd;
+    delete state.oldCwd;
+  }
 
   // Sanity check: the learner must be able to stand in the starting directory.
   const learner = new Vfs(state.fs, identityOf(state));

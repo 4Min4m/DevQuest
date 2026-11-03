@@ -1,9 +1,10 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Shell } from '../../sim/shell/shell';
-import type { RunResult } from '../../sim/shell/types';
+import type { EditRequest, RunResult } from '../../sim/shell/types';
+import { Editor } from './Editor';
 import { promptParts } from '../../sim/prompt';
 import { LineEditor } from './lineEditor';
 
@@ -34,12 +35,19 @@ interface Props {
   execute?: (line: string) => RunResult;
   /** Called after every executed line. May return extra text to print before the next prompt. */
   onCommand?: (line: string, result: RunResult) => string | void;
+  /** Called after the editor saved a file. May return extra text to print. */
+  onFileSaved?: () => string | void;
 }
 
-export function TerminalPane({ shell, banner, execute, onCommand }: Props) {
+export function TerminalPane({ shell, banner, execute, onCommand, onFileSaved }: Props) {
   const host = useRef<HTMLDivElement>(null);
-  const callbacks = useRef({ execute, onCommand });
-  callbacks.current = { execute, onCommand };
+  const callbacks = useRef({ execute, onCommand, onFileSaved });
+  callbacks.current = { execute, onCommand, onFileSaved };
+  const [edit, setEdit] = useState<EditRequest | null>(null);
+  const editing = useRef(false);
+  editing.current = edit !== null;
+  /** Live terminal + line editor, for printing after the editor closes. */
+  const live = useRef<{ term: Terminal; editor: LineEditor } | null>(null);
 
   useEffect(() => {
     if (!host.current) return;
@@ -61,8 +69,10 @@ export function TerminalPane({ shell, banner, execute, onCommand }: Props) {
     });
     if (banner) term.write(toTerminal(banner));
     term.write(editor.render());
+    live.current = { term, editor };
 
     const sub = term.onData((data) => {
+      if (editing.current) return;
       for (const ev of editor.feed(data)) {
         if (ev.type === 'write') term.write(ev.data);
         else if (ev.type === 'clear') term.clear();
@@ -76,6 +86,7 @@ export function TerminalPane({ shell, banner, execute, onCommand }: Props) {
           }
           const extra = callbacks.current.onCommand?.(ev.line, result);
           if (extra) term.write(toTerminal(extra));
+          if (result.edit) setEdit(result.edit);
           term.write(editor.render());
         }
       }
@@ -86,11 +97,30 @@ export function TerminalPane({ shell, banner, execute, onCommand }: Props) {
     ro.observe(host.current);
     term.focus();
     return () => {
+      live.current = null;
       ro.disconnect();
       sub.dispose();
       term.dispose();
     };
   }, [shell, banner]);
 
-  return <div ref={host} className="terminal-host" />;
+  return (
+    <div className="terminal-wrap">
+      <div ref={host} className="terminal-host" />
+      {edit && (
+        <Editor
+          request={edit}
+          onSaved={() => {
+            const extra = callbacks.current.onFileSaved?.();
+            const l = live.current;
+            if (extra && l) l.term.write('\r\x1b[2K' + toTerminal(extra) + l.editor.render());
+          }}
+          onClose={() => {
+            setEdit(null);
+            live.current?.term.focus();
+          }}
+        />
+      )}
+    </div>
+  );
 }

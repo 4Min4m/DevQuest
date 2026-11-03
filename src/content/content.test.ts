@@ -5,9 +5,18 @@ import { lessons, parseLesson } from './index';
 import { assertCatalog } from './schema';
 
 describe('lesson catalog', () => {
-  it('loads the Linux lessons in skill-tree order', () => {
-    expect(lessons.map((l) => l.branch)).toEqual(['linux-basics', 'files-permissions', 'processes', 'text-processing']);
-    expect(lessons.flatMap((l) => l.missions)).toHaveLength(8);
+  it('loads the lessons in skill-tree order', () => {
+    expect(lessons.map((l) => l.branch)).toEqual([
+      'linux-basics', 'files-permissions', 'processes', 'text-processing',
+      'docker-basics', 'images-dockerfile', 'volumes-networks', 'compose', 'troubleshooting',
+    ]);
+    const missions = lessons.flatMap((l) => l.missions);
+    expect(missions.filter((m) => m.type !== 'boss')).toHaveLength(16); // 8 Linux + 8 Docker
+    expect(missions.filter((m) => m.type === 'boss')).toHaveLength(3);
+  });
+
+  it('every lesson after the first requires the previous branch', () => {
+    lessons.slice(1).forEach((l, i) => expect(l.prerequisites).toEqual([lessons[i].id]));
   });
 
   it('has unique mission ids across lessons', () => {
@@ -32,7 +41,10 @@ describe.each(lessons.flatMap((l) => l.missions.map((m) => [`${l.id} / ${m.id}`,
     const s = new MissionSession(mission);
     for (const line of mission.solution) {
       const { result } = s.run(line);
-      const stderr = result.output.filter((c) => c.stream === 'stderr').map((c) => c.text).join('');
+      expect(result.exitCode, `exit code of '${line}'`).toBe(0);
+      // Progress notes are fine, and `docker logs` replays the container's own stderr.
+      if (/^docker( compose)? logs\b/.test(line)) continue;
+      const stderr = result.output.filter((c) => c.stream === 'stderr' && !c.note).map((c) => c.text).join('');
       expect(stderr, `stderr of '${line}'`).toBe('');
     }
     expect(s.status).toBe('passed');

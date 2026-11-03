@@ -1,4 +1,5 @@
-import type { CommandDef } from '../../shell/types';
+import type { CommandContext, CommandDef } from '../../shell/types';
+import { errText } from './util';
 
 export const help: CommandDef = {
   name: 'help',
@@ -85,3 +86,57 @@ export const exit: CommandDef = {
     return code;
   },
 };
+
+/**
+ * `nano FILE` (and vi/vim): opens DevOps Quest's simple editor. Permissions are
+ * checked like a real editor would (read on open, write on save).
+ */
+function editor(name: string): CommandDef {
+  return {
+    name,
+    summary: name === 'nano' ? 'edit a text file' : 'edit a text file (opens the simple editor)',
+    run(ctx: CommandContext) {
+      const files = ctx.args.filter((a) => !a.startsWith('-') && !a.startsWith('+'));
+      if (files.length !== 1) {
+        ctx.err(`devquest: usage: ${name} FILE  (the simple editor opens one file at a time)\n`);
+        return 1;
+      }
+      const display = files[0];
+      const abs = ctx.resolve(display);
+      let content = '';
+      try {
+        const node = ctx.vfs.lookup(abs);
+        if (node.type === 'dir') {
+          ctx.err(`${name}: ${display}: Is a directory\n`);
+          return 1;
+        }
+        content = ctx.vfs.readFile(abs);
+      } catch (e) {
+        const msg = errText(e);
+        if (msg !== 'No such file or directory' || !ctx.vfs.isDir(abs.replace(/\/[^/]+$/, '') || '/')) {
+          ctx.err(`${name}: ${display}: ${msg === 'No such file or directory' ? 'No such file or directory (parent directory missing)' : msg}\n`);
+          return 1;
+        }
+      }
+      const vfs = ctx.vfs;
+      ctx.shell.edit({
+        display,
+        content,
+        editor: name,
+        save(text) {
+          try {
+            vfs.writeFile(abs, text);
+            return null;
+          } catch (e) {
+            return `[ Error writing ${display}: ${errText(e)} ]`;
+          }
+        },
+      });
+      return 0;
+    },
+  };
+}
+
+export const nano = editor('nano');
+export const vi = editor('vi');
+export const vim = editor('vim');
