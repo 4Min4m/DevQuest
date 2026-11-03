@@ -14,7 +14,7 @@ browser terminal. No backend, no runtime network calls. See [CLAUDE.md](CLAUDE.m
 
 ```bash
 npm install
-npm run dev        # http://localhost:5173 — sandbox terminal
+npm run dev        # http://localhost:5173 — lessons + terminal
 npm test           # Vitest suite
 npm run typecheck
 npm run build      # static site in dist/
