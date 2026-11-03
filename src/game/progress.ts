@@ -7,7 +7,7 @@ import type { SessionStats } from './session';
 import type { BranchId, Lesson, Mission } from './types';
 
 export const MAX_HEARTS = 3;
-export const PROGRESS_VERSION = 1;
+export const PROGRESS_VERSION = 2;
 
 export interface MissionRecord {
   /** Highest XP total earned on this mission (replays only award improvements). */
@@ -26,6 +26,31 @@ export interface StreakState {
   lastDay: string | null;
 }
 
+/** Spaced-repetition schedule of a finished mission. */
+export interface ReviewState {
+  /** Successful reviews in a row (index into REVIEW_INTERVALS). */
+  reps: number;
+  /** Day (YYYY-MM-DD) the review becomes due. */
+  due: string;
+  /** Total successful reviews. */
+  done: number;
+}
+
+export interface DailyState {
+  /** Today's pick, fixed for the whole day once chosen. */
+  pick: { day: string; missionId: string; kind: 'new' | 'review' } | null;
+  /** Day the daily bonus was last claimed. */
+  lastClaimed: string | null;
+  count: number;
+}
+
+export interface InterviewStats {
+  attempts: number;
+  passed: number;
+  /** Fastest passing time, ms. */
+  bestMs: number | null;
+}
+
 export interface ProgressState {
   version: typeof PROGRESS_VERSION;
   xp: number;
@@ -33,10 +58,28 @@ export interface ProgressState {
   /** Hearts left per lesson id; a missing entry means full hearts. */
   hearts: Record<string, number>;
   streak: StreakState;
+  /** Badge id → ISO time it was earned. */
+  badges: Record<string, string>;
+  reviews: Record<string, ReviewState>;
+  daily: DailyState;
+  interviews: InterviewStats;
+  /** Lessons finished without losing a heart. */
+  perfectLessons: string[];
 }
 
 export function initialProgress(): ProgressState {
-  return { version: PROGRESS_VERSION, xp: 0, missions: {}, hearts: {}, streak: { current: 0, best: 0, lastDay: null } };
+  return {
+    version: PROGRESS_VERSION,
+    xp: 0,
+    missions: {},
+    hearts: {},
+    streak: { current: 0, best: 0, lastDay: null },
+    badges: {},
+    reviews: {},
+    daily: { pick: null, lastClaimed: null, count: 0 },
+    interviews: { attempts: 0, passed: 0, bestMs: null },
+    perfectLessons: [],
+  };
 }
 
 // ------------------------------------------------------------------ scoring
@@ -94,7 +137,14 @@ export function dayKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-function daysBetween(a: string, b: string): number {
+/** YYYY-MM-DD plus n days. */
+export function addDays(day: string, n: number): string {
+  const [y, m, d] = day.split('-').map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d + n));
+  return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(t.getUTCDate()).padStart(2, '0')}`;
+}
+
+export function daysBetween(a: string, b: string): number {
   const [ay, am, ad] = a.split('-').map(Number);
   const [by, bm, bd] = b.split('-').map(Number);
   return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86_400_000);
@@ -167,6 +217,8 @@ export function completeMission(
     xp: p.xp + awarded,
     missions: { ...p.missions, [mission.id]: record },
     streak,
+    // A newly finished mission comes back for a recall challenge tomorrow.
+    reviews: prev || p.reviews[mission.id] ? p.reviews : { ...p.reviews, [mission.id]: { reps: 0, due: addDays(dayKey(now), 1), done: 0 } },
   };
   return {
     progress,
@@ -287,7 +339,7 @@ export function importProgress(json: string): ProgressState {
     throw new Error('This file is not valid JSON.');
   }
   if (!isObj(data) || data.app !== 'devops-quest') throw new Error('This is not a DevOps Quest progress file.');
-  if (data.version !== PROGRESS_VERSION) throw new Error(`Unsupported progress version: ${String(data.version)}.`);
+  if (data.version !== 1 && data.version !== PROGRESS_VERSION) throw new Error(`Unsupported progress version: ${String(data.version)}.`);
   if (!isNum(data.xp)) throw new Error('Progress file has an invalid "xp" value.');
   if (!isObj(data.missions) || !isObj(data.hearts) || !isObj(data.streak)) {
     throw new Error('Progress file is missing missions, hearts or streak data.');
@@ -314,11 +366,54 @@ export function importProgress(json: string): ProgressState {
   if (!isNum(s.current) || !isNum(s.best) || !(s.lastDay === null || (typeof s.lastDay === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s.lastDay)))) {
     throw new Error('Progress file has invalid streak data.');
   }
-  return {
-    version: PROGRESS_VERSION,
+  const base: ProgressState = {
+    ...initialProgress(),
     xp: data.xp,
     missions,
     hearts,
     streak: { current: s.current, best: s.best, lastDay: s.lastDay as string | null },
+  };
+  if (data.version === 1) return migrateV1(base);
+  return { ...base, ...readV2Fields(data) };
+}
+
+/** v1 files had no reviews: schedule every finished mission for review the day after it was first done. */
+function migrateV1(p: ProgressState): ProgressState {
+  const reviews: Record<string, ReviewState> = {};
+  for (const [id, r] of Object.entries(p.missions)) {
+    reviews[id] = { reps: 0, due: addDays(dayKey(new Date(r.firstCompletedAt)), 1), done: 0 };
+  }
+  return { ...p, reviews };
+}
+
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function readV2Fields(data: Record<string, unknown>): Pick<ProgressState, 'badges' | 'reviews' | 'daily' | 'interviews' | 'perfectLessons'> {
+  const badges: Record<string, string> = {};
+  if (isObj(data.badges)) for (const [k, v] of Object.entries(data.badges)) if (typeof v === 'string') badges[k] = v;
+  const reviews: Record<string, ReviewState> = {};
+  if (isObj(data.reviews)) {
+    for (const [k, v] of Object.entries(data.reviews)) {
+      if (!isObj(v) || !isNum(v.reps) || typeof v.due !== 'string' || !DAY_RE.test(v.due)) {
+        throw new Error(`Progress file has an invalid review for "${k}".`);
+      }
+      reviews[k] = { reps: v.reps, due: v.due, done: isNum(v.done) ? v.done : 0 };
+    }
+  }
+  const d = isObj(data.daily) ? data.daily : {};
+  const pick = isObj(d.pick) && typeof d.pick.day === 'string' && typeof d.pick.missionId === 'string'
+    ? { day: d.pick.day, missionId: d.pick.missionId, kind: d.pick.kind === 'review' ? ('review' as const) : ('new' as const) }
+    : null;
+  const iv = isObj(data.interviews) ? data.interviews : {};
+  return {
+    badges,
+    reviews,
+    daily: { pick, lastClaimed: typeof d.lastClaimed === 'string' ? d.lastClaimed : null, count: isNum(d.count) ? d.count : 0 },
+    interviews: {
+      attempts: isNum(iv.attempts) ? iv.attempts : 0,
+      passed: isNum(iv.passed) ? iv.passed : 0,
+      bestMs: isNum(iv.bestMs) ? iv.bestMs : null,
+    },
+    perfectLessons: Array.isArray(data.perfectLessons) ? data.perfectLessons.filter((x): x is string => typeof x === 'string') : [],
   };
 }

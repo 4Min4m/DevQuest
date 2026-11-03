@@ -16,6 +16,8 @@ browser terminal. No backend, no runtime network calls. See [CLAUDE.md](CLAUDE.m
   plus a free-play Sandbox page.
 - **Step 5 done:** `docker build` (Dockerfile interpreter) and `docker compose`, a `nano` editor,
   Docker validators, and 8 Docker missions + 3 boss fights (CrashLoop, port conflict, broken nginx config).
+- **Step 6 done:** 16 badges, daily mission, spaced-review recall challenges, timed Interview Mode,
+  CI and GitHub Pages deployment.
 
 ## Develop
 
@@ -65,6 +67,20 @@ hello-world, curlimages/curl. `nano FILE` (also `vi`/`vim`) opens a simple edito
 Run `<command> --help` to see which options the simulator supports. Real commands that
 aren't simulated yet (e.g. `sed`, `vim`, `sudo`) say so explicitly instead of failing silently.
 
+## Deploy
+
+It's a static site (`npm run build` → `dist/`) with hash-based routing, so it works on any static host
+and from any sub-path.
+
+- **GitHub Pages:** `.github/workflows/deploy.yml` builds, tests and publishes `main`. One-time setup:
+  *Settings → Pages → Build and deployment → Source: GitHub Actions*. The site appears at
+  `https://<user>.github.io/<repo>/`.
+- **Cloudflare Pages:** connect the repository; build command `npm run build`, output directory
+  `dist`, environment variable `NODE_VERSION=22`.
+- **Locally / offline:** `npm run build && npx vite preview`, or serve `dist/` with any static server.
+
+`.github/workflows/ci.yml` runs typecheck, tests and build on every push and pull request.
+
 ## Game rules
 
 - **XP** per mission = base XP − hint costs (never below 25 % of base) + 20 % for no hints
@@ -74,6 +90,14 @@ aren't simulated yet (e.g. `sed`, `vim`, `sudo`) say so explicitly instead of fa
   fails and you retry with full hearts. Completing a lesson refills them.
 - **Streak:** complete at least one mission per calendar day.
 - **Unlocking:** a lesson opens when its prerequisites are complete; missions open in order.
+- **Recall challenges (spaced review):** finished missions come back after 1, 3, 7, 14, 30, 60 days.
+  No hints, separate practice hearts; a clean recall is worth 30 % of the mission XP. Failing resets the interval.
+- **Daily mission:** picked when the day starts (most overdue review, else your next new mission);
+  finishing it pays +25 XP.
+- **Interview Mode:** 3 random missions you've completed, 10 minutes, no hints. 15 XP per solve,
+  +30 for solving all in time.
+- **Badges:** 16, from *First steps* and *CrashLoop fixer* to *Boss slayer*, *Flawless* (a lesson
+  without losing a heart) and *Hired!* (pass an interview). See them on the Profile page.
 
 ## Writing missions
 

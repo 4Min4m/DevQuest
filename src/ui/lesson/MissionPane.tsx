@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { MAX_HEARTS, Reward } from '../../game/progress';
+import type { BadgeDef } from '../../game/badges';
+import { MAX_HEARTS } from '../../game/progress';
 import type { MissionSession } from '../../game/session';
 import type { Lesson } from '../../game/types';
 import type { CheckResult } from '../../game/validators';
@@ -11,7 +12,9 @@ interface Props {
   session: MissionSession;
   hearts: number;
   /** Set once the mission has been completed and scored. */
-  reward: Reward | null;
+  reward: RewardView | null;
+  /** Recall challenges hide hints and the theory. */
+  mode: 'lesson' | 'review';
   /** Results of the last explicit "Check" press, if it failed. */
   feedback: CheckResult[] | null;
   mistakes: string[];
@@ -38,53 +41,58 @@ export function Hearts({ count }: { count: number }) {
   );
 }
 
-function RewardPanel({ reward }: { reward: Reward }) {
-  const b = reward.breakdown;
+/** Display model for any reward (lesson completion or recall challenge). */
+export interface RewardView {
+  total: number;
+  lines: [string, string][];
+  levelUp?: number;
+  streak?: number;
+  badges: BadgeDef[];
+  note?: string;
+}
+
+function RewardPanel({ reward }: { reward: RewardView }) {
   return (
     <div className="reward">
       <div className="reward-total">
-        +{reward.awarded} XP
-        {reward.levelAfter > reward.levelBefore && <span className="level-up">Level up! → {reward.levelAfter}</span>}
+        +{reward.total} XP
+        {reward.levelUp && <span className="level-up">Level up! → {reward.levelUp}</span>}
       </div>
       <ul className="reward-lines">
-        <li>
-          <span>Mission</span>
-          <span>{b.base}</span>
-        </li>
-        {b.hintCost > 0 && (
-          <li>
-            <span>Hints used</span>
-            <span>−{b.hintCost}</span>
+        {reward.lines.map(([label, value]) => (
+          <li key={label} className={label.startsWith('Previous best') ? 'muted' : ''}>
+            <span>{label}</span>
+            <span>{value}</span>
           </li>
-        )}
-        {b.noHintBonus > 0 && (
-          <li>
-            <span>No-hint bonus</span>
-            <span>+{b.noHintBonus}</span>
-          </li>
-        )}
-        {b.parBonus > 0 && (
-          <li>
-            <span>On-par bonus</span>
-            <span>+{b.parBonus}</span>
-          </li>
-        )}
-        {reward.previousBest > 0 && (
-          <li className="muted">
-            <span>Previous best (already earned)</span>
-            <span>−{Math.min(reward.previousBest, b.total)}</span>
-          </li>
-        )}
+        ))}
       </ul>
-      {reward.streak > 0 && <p className="stats">🔥 {reward.streak}-day streak</p>}
+      {reward.badges.length > 0 && (
+        <div className="new-badges">
+          {reward.badges.map((b) => (
+            <div key={b.id} className="new-badge" title={b.description}>
+              <span className="badge-icon" aria-hidden>
+                {b.icon}
+              </span>
+              <span>
+                <strong>Badge unlocked: {b.title}</strong>
+                <br />
+                <span className="muted">{b.description}</span>
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      {reward.note && <p className="stats">{reward.note}</p>}
+      {!!reward.streak && <p className="stats">🔥 {reward.streak}-day streak</p>}
     </div>
   );
 }
 
 export function MissionPane(props: Props) {
-  const { lesson, missionIndex, session, hearts, reward, feedback, mistakes, onCheck, onHint, onReset, onRetry, onNext, nextLabel } = props;
+  const { lesson, missionIndex, session, hearts, reward, feedback, mistakes, onCheck, onHint, onReset, onRetry, onNext, nextLabel, mode } = props;
   const mission = session.mission;
-  const [theoryOpen, setTheoryOpen] = useState(missionIndex === 0);
+  const review = mode === 'review';
+  const [theoryOpen, setTheoryOpen] = useState(missionIndex === 0 && !review);
   const passed = session.status === 'passed';
   const failed = session.status === 'failed';
   const stats = session.stats;
@@ -108,9 +116,13 @@ export function MissionPane(props: Props) {
 
       <section className="mission">
         <div className="mission-meta">
-          <span>
-            Mission {missionIndex + 1}/{lesson.missions.length}
-          </span>
+          {review ? (
+            <span className="badge review">🔄 Recall challenge</span>
+          ) : (
+            <span>
+              Mission {missionIndex + 1}/{lesson.missions.length}
+            </span>
+          )}
           <span className={`badge ${mission.type}`}>{TYPE_LABEL[mission.type]}</span>
           <span className="badge xp">{mission.xp} XP</span>
           <span className="badge" title="Expected number of commands — meet it for a bonus">
@@ -119,6 +131,7 @@ export function MissionPane(props: Props) {
           <Hearts count={hearts} />
         </div>
         <h2>{mission.title}</h2>
+        {review && <p className="stats">You solved this before. No hints this time: can you still do it?</p>}
         <Markdown text={mission.prompt} />
 
         {hints.length > 0 && (
@@ -191,7 +204,7 @@ export function MissionPane(props: Props) {
             <button className="primary" onClick={onCheck}>
               Check
             </button>
-            {session.hasMoreHints && (
+            {session.hasMoreHints && !review && (
               <button onClick={onHint}>
                 Hint ({hints.length + 1}/{mission.hints.length}, −{mission.hints[hints.length].cost} XP)
               </button>

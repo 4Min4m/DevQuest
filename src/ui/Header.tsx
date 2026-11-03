@@ -16,6 +16,9 @@ export function Header({ route }: { route: Route }) {
         <button className={route.view === 'tree' ? 'active' : ''} onClick={() => navigate({ view: 'tree' })}>
           Skill tree
         </button>
+        <button className={route.view === 'interview' ? 'active' : ''} onClick={() => navigate({ view: 'interview' })}>
+          Interview
+        </button>
         <button className={route.view === 'sandbox' ? 'active' : ''} onClick={() => navigate({ view: 'sandbox' })}>
           Sandbox
         </button>

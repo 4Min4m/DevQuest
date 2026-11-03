@@ -1,6 +1,7 @@
 import { findLesson } from '../content';
 import { Header } from './Header';
-import { LessonView } from './lesson/LessonView';
+import { InterviewView } from './interview/InterviewView';
+import { LessonView, ReviewView } from './lesson/LessonView';
 import { Profile } from './profile/Profile';
 import { Sandbox } from './sandbox/Sandbox';
 import { useRoute } from './router';
@@ -24,6 +25,10 @@ export function App() {
     body = <Profile />;
   } else if (route.view === 'sandbox') {
     body = <Sandbox />;
+  } else if (route.view === 'interview') {
+    body = <InterviewView />;
+  } else if (route.view === 'review') {
+    body = <ReviewView missionId={route.missionId} />;
   } else {
     body = <SkillTree />;
   }

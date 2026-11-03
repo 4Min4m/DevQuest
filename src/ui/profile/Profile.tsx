@@ -1,6 +1,9 @@
 import { useRef, useState } from 'react';
 import { lessons } from '../../content';
+import { BADGES } from '../../game/badges';
+import { formatClock } from '../../game/interview';
 import { activeStreak, dayKey, levelInfo } from '../../game/progress';
+import { totalReviews } from '../../game/review';
 import { actions, useProgress } from '../state';
 
 export function Profile() {
@@ -62,7 +65,39 @@ export function Profile() {
           <span className="stat-value">{records.filter((r) => r.onPar).length}</span>
           <span className="stat-label">Solved on par</span>
         </div>
+        <div className="stat">
+          <span className="stat-value">{totalReviews(progress)}</span>
+          <span className="stat-label">Recall challenges done</span>
+        </div>
+        <div className="stat">
+          <span className="stat-value">
+            {progress.interviews.passed}/{progress.interviews.attempts}
+          </span>
+          <span className="stat-label">
+            Interviews passed{progress.interviews.bestMs !== null ? ` (best ${formatClock(progress.interviews.bestMs)})` : ''}
+          </span>
+        </div>
       </div>
+
+      <section>
+        <h2 className="section-title">
+          Badges <span className="muted">{Object.keys(progress.badges).length}/{BADGES.length}</span>
+        </h2>
+        <ul className="badge-grid">
+          {BADGES.map((b) => {
+            const at = progress.badges[b.id];
+            return (
+              <li key={b.id} className={at ? 'earned' : 'locked'} title={at ? `Earned ${at.slice(0, 10)}` : 'Not earned yet'}>
+                <span className="badge-icon" aria-hidden>
+                  {at ? b.icon : '🔒'}
+                </span>
+                <span className="badge-title">{b.title}</span>
+                <span className="badge-desc">{b.description}</span>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
 
       <section className="data-section">
         <h2>Your data</h2>

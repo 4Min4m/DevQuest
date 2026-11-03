@@ -2,6 +2,7 @@ import { lessons } from '../../content';
 import { heartsLeft, nextMissionIndex, NodeStatus, skillTree } from '../../game/progress';
 import { Hearts } from '../lesson/MissionPane';
 import { navigate } from '../router';
+import { TodayPanel } from './TodayPanel';
 import { useProgress } from '../state';
 
 const STATUS_LABEL: Record<NodeStatus, string> = {
@@ -17,6 +18,7 @@ export function SkillTree() {
   const tree = skillTree(progress, lessons);
   return (
     <div className="skill-tree">
+      <TodayPanel />
       <h1>Skill tree</h1>
       <p className="muted">Finish a branch to unlock the next one. Each lesson gives you 3 hearts; wrong checks and destructive mistakes cost one.</p>
       <ol className="branches">
