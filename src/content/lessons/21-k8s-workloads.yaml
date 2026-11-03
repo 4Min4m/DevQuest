@@ -1,0 +1,410 @@
+id: k8s-workloads
+title: Pods & Deployments
+branch: kubernetes
+prerequisites: [docker-basics]
+sources:
+  - 05-Kubernetes/01-Architecture
+  - 05-Kubernetes/02-Core-Workloads
+theory: |
+  Kubernetes runs your containers on a cluster and keeps them in the **desired state** you declare.
+
+  - **Control plane:** `kube-apiserver` (the only thing that talks to `etcd`, the cluster's database),
+    `kube-scheduler` (picks a node for each new pod), `kube-controller-manager` (control loops that
+    make reality match the desired state)
+  - **Every node:** `kubelet` (starts the pod's containers and reports back), `kube-proxy` (Service
+    networking) and a container runtime (containerd)
+
+  | Object | What it's for |
+  |---|---|
+  | **Pod** | one or more containers sharing an IP — the smallest unit, rarely created directly |
+  | **Deployment** | stateless apps: desired replicas, rolling updates, rollbacks (manages ReplicaSets) |
+  | **ReplicaSet** | keeps N identical pods running (a Deployment makes one per version) |
+  | **DaemonSet** | one pod per node (log shippers, kube-proxy) |
+  | **Job** | run to completion; retries on failure |
+
+  | kubectl | |
+  |---|---|
+  | `kubectl get pods -o wide` / `describe pod NAME` | status / details **and events** |
+  | `kubectl create deployment web --image=nginx:1.27 --replicas=3` | imperative create |
+  | `kubectl apply -f web.yaml` | declarative: create or update from a manifest |
+  | `kubectl scale deploy/web --replicas=5` | change the desired count |
+  | `kubectl set image deploy/web nginx=nginx:1.28` | rolling update |
+  | `kubectl rollout status / history / undo deploy/web` | follow, inspect, roll back |
+  | `kubectl logs POD` (`--previous` for the crashed run) | container output |
+
+  Things take a few seconds: pods go **Pending → ContainerCreating → Running**. `kubectl rollout
+  status` waits for you. Common trouble: **ImagePullBackOff** (bad image name/tag),
+  **CrashLoopBackOff** (the process keeps exiting — read the logs), **Pending** (no node fits:
+  read the events).
+missions:
+  - id: first-deployment
+    title: Your first Deployment
+    type: guided
+    prompt: |
+      The cluster is ready (`kubectl get nodes`).
+
+      **Run the web frontend: a Deployment named `web` with the image `nginx:1.27` and 3 replicas,**
+      and wait until all of them are available.
+    initialState:
+      kubeManifests: ""
+    hints:
+      - text: "`kubectl create deployment NAME --image=IMAGE --replicas=N` creates it in one line."
+        cost: 5
+      - text: "`kubectl rollout status deployment/web` waits until every replica is up; `kubectl get pods -o wide` shows where they run."
+        cost: 5
+      - text: "`kubectl create deployment web --image=nginx:1.27 --replicas=3`"
+        cost: 10
+    validator:
+      checks:
+        - type: kubeRollout
+          name: web
+          image: nginx:1.27
+          replicas: 3
+          message: Deployment `web` should run 3 available replicas of nginx:1.27.
+    xp: 40
+    par: 4
+    solution:
+      - kubectl get nodes
+      - kubectl create deployment web --image=nginx:1.27 --replicas=3
+      - kubectl rollout status deployment/web
+    explain: |
+      You declared "3 replicas of nginx:1.27". The Deployment created a ReplicaSet, which created 3 Pods;
+      the scheduler spread them over the worker nodes and each node's kubelet pulled the image and
+      started the container. `kubectl get rs` and `kubectl get pods -o wide` show every layer.
+
+  - id: self-healing
+    title: Kill a pod, watch it come back
+    type: guided
+    prompt: |
+      The `api` Deployment runs 2 replicas. Prove that Kubernetes heals itself:
+
+      1. **delete the api pods** (yes, really) and check that new ones appear
+      2. then **scale `api` to 4 replicas** for the sale weekend
+    initialState:
+      kubeManifests: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: api
+          labels: { app: api }
+        spec:
+          replicas: 2
+          selector:
+            matchLabels: { app: api }
+          template:
+            metadata:
+              labels: { app: api }
+            spec:
+              containers:
+              - name: api
+                image: nginx:1.27
+                ports:
+                - containerPort: 80
+      setupAge: 600
+    hints:
+      - text: "`kubectl get pods` shows the two api pods. `kubectl delete pod NAME` (or `-l app=api` for all of them)."
+        cost: 5
+      - text: "Run `kubectl get pods` again: the ReplicaSet already created replacements with new names."
+        cost: 5
+      - text: "`kubectl scale deployment api --replicas=4`, then `kubectl rollout status deployment/api`."
+        cost: 10
+    validator:
+      checks:
+        - type: commandUsed
+          command: kubectl
+          argsInclude: [delete]
+          message: Delete the api pods first.
+        - type: kubeRollout
+          name: api
+          replicas: 4
+          message: "`api` should run 4 available replicas."
+    xp: 40
+    par: 6
+    solution:
+      - kubectl get pods
+      - kubectl delete pod -l app=api
+      - kubectl get pods
+      - kubectl scale deployment api --replicas=4
+      - kubectl rollout status deployment/api
+    explain: |
+      Pods are cattle, not pets: the ReplicaSet controller saw "2 wanted, 0 running" and created new
+      pods within a second. That reconcile loop — compare desired with actual, act on the difference —
+      is how every Kubernetes controller works.
+
+  - id: rolling-update
+    title: A rolling update
+    type: guided
+    prompt: |
+      The `shop` Deployment runs `nginx:1.27`. Security wants the smaller alpine variant.
+
+      **Update `shop` to `nginx:1.27-alpine` without downtime**, record why in the
+      `kubernetes.io/change-cause` annotation (e.g. "Switch to alpine image"), and check the rollout history.
+    initialState:
+      kubeManifests: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: shop
+          labels: { app: shop }
+          annotations:
+            kubernetes.io/change-cause: "Initial release"
+        spec:
+          replicas: 3
+          selector:
+            matchLabels: { app: shop }
+          template:
+            metadata:
+              labels: { app: shop }
+            spec:
+              containers:
+              - name: nginx
+                image: nginx:1.27
+      setupAge: 600
+    hints:
+      - text: "`kubectl set image deployment/shop CONTAINER=IMAGE` — the container is called `nginx` (see `kubectl describe deploy shop`)."
+        cost: 5
+      - text: "`kubectl annotate deployment/shop kubernetes.io/change-cause=\"Switch to alpine image\" --overwrite`"
+        cost: 5
+      - text: "`kubectl rollout status deployment/shop`, then `kubectl rollout history deployment/shop`."
+        cost: 10
+    validator:
+      checks:
+        - type: kubeRollout
+          name: shop
+          image: nginx:1.27-alpine
+          replicas: 3
+        - type: kubeResource
+          kind: Deployment
+          name: shop
+          path: metadata.annotations
+          regex: "change-cause\":\"(?!Initial release)[^\"]+"
+          message: Record the reason in the kubernetes.io/change-cause annotation.
+        - type: commandUsed
+          command: kubectl
+          argsInclude: [rollout, history]
+          message: Look at the rollout history.
+    xp: 50
+    par: 5
+    solution:
+      - kubectl set image deployment/shop nginx=nginx:1.27-alpine
+      - kubectl annotate deployment/shop kubernetes.io/change-cause="Switch to alpine image" --overwrite
+      - kubectl rollout status deployment/shop
+      - kubectl rollout history deployment/shop
+    explain: |
+      A rolling update creates a new ReplicaSet and shifts pods over a few at a time (by default at
+      most 25% extra and 25% unavailable), so the app keeps serving. Each template change is a new
+      **revision** — the change-cause shows up in `rollout history`, which is what makes rollbacks easy.
+
+  - id: rollback
+    title: Bad release? Roll it back
+    type: guided
+    prompt: |
+      Ten minutes ago someone rolled out `ghcr.io/acme/checkout:1.5`. The rollout never finished and
+      the team is nervous. Customers are still being served — for now.
+
+      **Find out what's wrong with the new version, then roll `checkout` back to the previous
+      revision** (it should end up on `ghcr.io/acme/checkout:1.4`, fully available).
+    initialState:
+      kubeImages:
+        ghcr.io/acme/checkout:1.4:
+          listen: [8080]
+          logs: ["checkout 1.4 listening on :8080"]
+          http: { "/": { body: "checkout 1.4 ({pod})\n" } }
+        ghcr.io/acme/checkout:1.5:
+          listen: [8080]
+          logs: ["checkout 1.5 starting", "panic: runtime error: invalid memory address or nil pointer dereference", "[signal SIGSEGV: segmentation violation code=0x1 addr=0x18 pc=0x6b4f2a]", "", "goroutine 1 [running]:", "main.loadPaymentProviders(...)", "        /src/cmd/checkout/main.go:88"]
+          exitCode: 2
+      kubeManifests: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: checkout
+          labels: { app: checkout }
+        spec:
+          replicas: 3
+          selector:
+            matchLabels: { app: checkout }
+          template:
+            metadata:
+              labels: { app: checkout }
+            spec:
+              containers:
+              - name: checkout
+                image: ghcr.io/acme/checkout:1.4
+                ports:
+                - containerPort: 8080
+      setup:
+        - kubectl rollout status deployment/checkout
+        - kubectl set image deployment/checkout checkout=ghcr.io/acme/checkout:1.5
+      setupAge: 600
+    hints:
+      - text: "`kubectl get pods`: the new pod is in CrashLoopBackOff, the 3 old ones still run (that's why customers are fine)."
+        cost: 5
+      - text: "`kubectl logs POD` (or `kubectl logs -l app=checkout`) shows the crash; `--previous` shows the last crashed run."
+        cost: 5
+      - text: "`kubectl rollout undo deployment/checkout`, then `kubectl rollout status deployment/checkout`."
+        cost: 10
+    validator:
+      checks:
+        - type: anyOf
+          checks:
+            - { type: commandUsed, command: kubectl, argsInclude: [logs] }
+            - { type: commandUsed, command: kubectl, argsInclude: [describe] }
+          message: Investigate first (kubectl logs / describe).
+        - type: kubeRollout
+          name: checkout
+          image: ghcr.io/acme/checkout:1.4
+          replicas: 3
+    xp: 60
+    par: 5
+    solution:
+      - kubectl get pods
+      - kubectl logs -l app=checkout --tail=3
+      - kubectl rollout undo deployment/checkout
+      - kubectl rollout status deployment/checkout
+    explain: |
+      The rolling update protected you: Kubernetes never removes old pods faster than new ones become
+      available, so a crashing release stalls instead of taking the site down. `rollout undo` points the
+      Deployment back at the previous ReplicaSet's template. Next step in real life: a readiness probe
+      and a progress deadline alert, so a stuck rollout pages someone.
+
+  - id: declarative-manifest
+    title: Write the manifest
+    type: free
+    prompt: |
+      The team wants everything in Git as YAML. Create the file **`~/k8s/redis.yaml`** with a
+      Deployment named `redis` (image `redis:7`, 1 replica) whose container requests `100m` CPU and
+      `64Mi` memory and is limited to `128Mi` memory — then **apply it**.
+
+      Tip: `kubectl create deployment redis --image=redis:7 --dry-run=client -o yaml > k8s/redis.yaml`
+      gives you a skeleton to edit (`nano k8s/redis.yaml`).
+    initialState:
+      files:
+        /home/student/k8s/README.md: "Manifests for the shop cluster.\n"
+    hints: []
+    validator:
+      checks:
+        - type: fileContains
+          path: /home/student/k8s/redis.yaml
+          regex: "kind: Deployment"
+        - type: kubeRollout
+          name: redis
+          image: redis:7
+        - type: kubeResource
+          kind: Deployment
+          name: redis
+          path: spec.template.spec.containers.0.resources
+          regex: "\"limits\":\\{\"memory\":\"128Mi\"\\}"
+          message: The container should be limited to 128Mi of memory.
+        - type: kubeResource
+          kind: Deployment
+          name: redis
+          path: spec.template.spec.containers.0.resources.requests
+          regex: "\"cpu\":\"100m\".*\"memory\":\"64Mi\"|\"memory\":\"64Mi\".*\"cpu\":\"100m\""
+          message: The container should request 100m CPU and 64Mi memory.
+        - type: commandUsed
+          command: kubectl
+          argsInclude: [apply]
+          message: Apply the file with kubectl apply -f.
+    xp: 80
+    par: 4
+    solution:
+      - "echo -e 'apiVersion: apps/v1\\nkind: Deployment\\nmetadata:\\n  name: redis\\n  labels:\\n    app: redis\\nspec:\\n  replicas: 1\\n  selector:\\n    matchLabels:\\n      app: redis\\n  template:\\n    metadata:\\n      labels:\\n        app: redis\\n    spec:\\n      containers:\\n      - name: redis\\n        image: redis:7\\n        resources:\\n          requests:\\n            cpu: 100m\\n            memory: 64Mi\\n          limits:\\n            memory: 128Mi' > k8s/redis.yaml"
+      - kubectl apply -f k8s/redis.yaml
+      - kubectl rollout status deployment/redis
+    explain: |
+      **Requests** are what the scheduler reserves on a node; **limits** are the ceiling at runtime (go
+      over the memory limit and the container is OOMKilled). `kubectl apply` is declarative: run it again
+      after editing the file and Kubernetes changes only what differs.
+
+  - id: k8s-workloads-check
+    title: "Knowledge check: architecture & workloads"
+    type: quiz
+    prompt: The control plane, the scheduling flow and which workload fits which job.
+    xp: 30
+    questions:
+      - kind: single
+        prompt: Which component is the only one that reads and writes etcd directly?
+        options: [kube-scheduler, kubelet, kube-apiserver, kube-proxy]
+        answer: 2
+      - kind: order
+        prompt: Put the life of a new Deployment's pod in order.
+        items:
+          - kubectl sends the Deployment to the API server, which stores it in etcd
+          - The deployment controller creates a ReplicaSet, which creates Pod objects
+          - The scheduler assigns each pod to a node
+          - The node's kubelet pulls the image and starts the containers
+      - kind: single
+        prompt: You need a log collector on every node, including nodes added later. Which workload?
+        options: [Deployment, StatefulSet, DaemonSet, Job]
+        answer: 2
+      - kind: single
+        prompt: A Postgres cluster needs stable names (db-0, db-1) and its own disk per replica. Which workload?
+        options: [Deployment, StatefulSet, DaemonSet, CronJob]
+        answer: 1
+      - kind: multi
+        prompt: A pod shows ImagePullBackOff. Which could be the cause?
+        options:
+          - A typo in the image name
+          - A tag that doesn't exist
+          - The app crashes on startup
+          - Missing credentials for a private registry
+        answers: [0, 1, 3]
+        explain: A crashing app is CrashLoopBackOff — the image was pulled fine.
+      - kind: text
+        prompt: Which command rolls a Deployment named web back to its previous version?
+        accept: ["kubectl rollout undo deployment/web", "kubectl rollout undo deploy/web", "kubectl rollout undo deployment web", "kubectl rollout undo deploy web"]
+
+  - id: boss-frontend-pending
+    title: "Boss: the deploy that never finishes"
+    type: boss
+    prompt: |
+      🚨 The new `frontend` Deployment was applied an hour ago and **not a single pod is running**.
+      The author is on vacation.
+
+      Get `frontend` to **3/3 ready replicas** serving `nginx:1.27`. Keep 3 replicas — scaling down is not a fix.
+    initialState:
+      kubeManifests: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: frontend
+          labels: { app: frontend }
+        spec:
+          replicas: 3
+          selector:
+            matchLabels: { app: frontend }
+          template:
+            metadata:
+              labels: { app: frontend }
+            spec:
+              containers:
+              - name: frontend
+                image: ngnix:1.27
+                resources:
+                  requests:
+                    memory: 6Gi
+                    cpu: 250m
+      setupAge: 3600
+    hints: []
+    validator:
+      checks:
+        - type: kubeRollout
+          name: frontend
+          image: nginx:1.27
+          replicas: 3
+          message: frontend should be fully rolled out with nginx:1.27 and 3 replicas.
+    xp: 150
+    par: 7
+    solution:
+      - kubectl get pods
+      - kubectl describe pod -l app=frontend
+      - kubectl set resources deployment/frontend --requests=memory=128Mi
+      - kubectl get pods
+      - kubectl set image deployment/frontend frontend=nginx:1.27
+      - kubectl rollout status deployment/frontend
+    explain: |
+      Two bugs hid behind each other. First the pods were **Pending**: each asked for 6Gi of memory and
+      no node has that much (`FailedScheduling ... Insufficient memory` in the events). Once they fit,
+      the next layer appeared: **ImagePullBackOff** — `ngnix` is not an image. `kubectl describe` and the
+      events tell you which layer you're stuck at; fix one, then look again.

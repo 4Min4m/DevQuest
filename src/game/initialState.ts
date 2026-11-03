@@ -1,5 +1,9 @@
 import { createShell } from '../sim';
 import { newRepo } from '../sim/git';
+import { parseAllDocuments } from 'yaml';
+import { clusterOf, putObj } from '../sim/kube/cluster';
+import { reconcile } from '../sim/kube/controllers';
+import { admit } from '../sim/kube/manifest';
 import { identityOf } from '../sim/shell/identity';
 import { createInitialState, Process, refreshProc, SimState } from '../sim/state';
 import { dirname, isWithin, normalize, splitPath } from '../sim/vfs/path';
@@ -104,6 +108,21 @@ export function buildInitialState(spec: InitialStateSpec = {}): SimState {
   for (const h of spec.gitHosted ?? []) {
     const remote = newRepo(h.url, h.branch ?? 'main', true);
     (state.git ??= { repos: {}, remotes: {} }).remotes[h.url] = remote;
+  }
+
+  if (spec.kubeImages || spec.kubeManifests) {
+    const ks = clusterOf(state);
+    Object.assign(ks.images, spec.kubeImages ?? {});
+    reconcile(state);
+    for (const doc of parseAllDocuments(spec.kubeManifests ?? '').map((d) => d.toJS()).filter(Boolean)) {
+      const r = admit(ks, doc, state.clock, { source: 'mission', mode: 'apply', lastApplied: true });
+      if (r.action === 'created') putObj(ks, r.obj);
+    }
+    // Without setup commands the cluster still runs for `setupAge` before the learner arrives.
+    if (spec.kubeManifests && !spec.setup?.length) {
+      state.clock += (spec.setupAge ?? 300) * 1000;
+      reconcile(state);
+    }
   }
 
   if (spec.binaries && state.systemd) Object.assign(state.systemd.binaries, spec.binaries);

@@ -21,6 +21,23 @@ export const env: CommandDef = {
   },
 };
 
+export const printenv: CommandDef = {
+  name: 'printenv',
+  summary: 'print all or part of the environment',
+  run(ctx) {
+    if (!ctx.args.length) {
+      for (const [k, v] of Object.entries(ctx.env).sort(([a], [b]) => (a < b ? -1 : 1))) ctx.out(`${k}=${v}\n`);
+      return 0;
+    }
+    let code = 0;
+    for (const a of ctx.args) {
+      if (ctx.env[a] === undefined) code = 1;
+      else ctx.out(ctx.env[a] + '\n');
+    }
+    return code;
+  },
+};
+
 export const exportCmd: CommandDef = {
   name: 'export',
   summary: 'mark variables to be passed to child processes',

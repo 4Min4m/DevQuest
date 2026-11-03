@@ -1,0 +1,421 @@
+id: k8s-troubleshooting
+title: Probes & troubleshooting
+branch: k8s-troubleshooting
+prerequisites: [k8s-services-config]
+sources:
+  - 05-Kubernetes/10-Observability
+  - 05-Kubernetes/02-Core-Workloads
+  - 05-Kubernetes/06-Scheduling
+theory: |
+  **Probes** tell the kubelet about your app's health:
+
+  | Probe | Question | On failure |
+  |---|---|---|
+  | `readinessProbe` | can it take traffic now? | removed from Service endpoints (not restarted) |
+  | `livenessProbe` | is it stuck? | container is **restarted** |
+  | `startupProbe` | has it finished starting? | liveness/readiness wait until it passes |
+
+  A liveness probe that's too eager kills slow-starting apps in a loop — give them a startupProbe (or a
+  longer `initialDelaySeconds`).
+
+  **Reading pod status:**
+
+  | STATUS | Meaning | Look at |
+  |---|---|---|
+  | `Pending` | no node fits (requests, taints, selectors) | `describe pod` → FailedScheduling |
+  | `ContainerCreating` (stuck) | volume can't mount | events → FailedMount |
+  | `ImagePullBackOff` / `ErrImagePull` | wrong image/tag or registry auth | events |
+  | `CreateContainerConfigError` | missing ConfigMap/Secret or key | events / describe |
+  | `CrashLoopBackOff` | the process keeps exiting | `logs --previous`, Last State |
+  | `OOMKilled` (exit 137) | used more memory than its limit | raise the limit or fix the leak |
+  | `Running` but `0/1` | readiness probe failing | events → Unhealthy |
+
+  The troubleshooting loop: `kubectl get pods` → `kubectl describe pod` (Events!) →
+  `kubectl logs [--previous]` → fix → `kubectl rollout status`.
+missions:
+  - id: readiness-path
+    title: Running, but never Ready
+    type: guided
+    prompt: |
+      The `catalog` pods are `Running` but stuck at `0/1` READY, so the `catalog` Service has no endpoints.
+
+      **Find out why they're never ready and fix the Deployment** (both pods ready, Service has endpoints).
+      The app exposes `/healthz` (liveness) and `/ready` (readiness) on port 8080.
+    initialState:
+      kubeImages:
+        ghcr.io/acme/catalog:3.1:
+          listen: [8080]
+          logs: ["catalog 3.1 serving on :8080"]
+          http:
+            /healthz: { body: "ok\n" }
+            /ready: { body: "ready\n" }
+            /: { body: "{\"products\":42}\n" }
+      kubeManifests: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: catalog
+          labels: { app: catalog }
+        spec:
+          replicas: 2
+          selector:
+            matchLabels: { app: catalog }
+          template:
+            metadata:
+              labels: { app: catalog }
+            spec:
+              containers:
+              - name: catalog
+                image: ghcr.io/acme/catalog:3.1
+                ports:
+                - containerPort: 8080
+                readinessProbe:
+                  httpGet:
+                    path: /health
+                    port: 8080
+                  periodSeconds: 5
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: catalog
+        spec:
+          selector: { app: catalog }
+          ports:
+          - port: 80
+            targetPort: 8080
+    hints:
+      - text: "`kubectl describe pod -l app=catalog` — look at the Readiness line and the Unhealthy events."
+        cost: 5
+      - text: "The probe asks for `/health`, which returns 404. The app's readiness endpoint is `/ready`."
+        cost: 5
+      - text: "`kubectl get deploy catalog -o yaml > c.yaml`, fix the path (`sed -i 's#path: /health$#path: /ready#' c.yaml`), `kubectl apply -f c.yaml`."
+        cost: 10
+    validator:
+      checks:
+        - type: kubeRollout
+          name: catalog
+          replicas: 2
+        - type: kubeEndpoints
+          service: catalog
+          min: 2
+        - type: kubeHttp
+          service: catalog
+          contains: products
+    xp: 50
+    par: 6
+    solution:
+      - kubectl describe pod -l app=catalog
+      - kubectl get deployment catalog -o yaml > c.yaml
+      - "sed -i 's#path: /health$#path: /ready#' c.yaml"
+      - kubectl apply -f c.yaml
+      - kubectl rollout status deployment/catalog
+    explain: |
+      A failing **readiness** probe never restarts anything — it just keeps the pod out of the Service.
+      That's exactly what you want during a slow start or a dependency outage, and exactly what hurts when
+      the probe itself is wrong.
+
+  - id: liveness-slow-start
+    title: Killed before it could start
+    type: guided
+    prompt: |
+      `reports` loads a big template cache at startup (about 45 seconds). Since someone added a liveness
+      probe, its pods restart forever.
+
+      **Stop the restart loop** without removing the liveness probe: give the app time to start (a
+      `startupProbe`, or a liveness `initialDelaySeconds` longer than the startup time).
+    initialState:
+      kubeImages:
+        ghcr.io/acme/reports:2.0:
+          listen: [8080]
+          warmupSec: 45
+          logs: ["reports 2.0 starting", "loading template cache (this takes a while)..."]
+          http:
+            /healthz: { body: "ok\n" }
+      kubeManifests: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: reports
+          labels: { app: reports }
+        spec:
+          replicas: 1
+          selector:
+            matchLabels: { app: reports }
+          template:
+            metadata:
+              labels: { app: reports }
+            spec:
+              containers:
+              - name: reports
+                image: ghcr.io/acme/reports:2.0
+                ports:
+                - containerPort: 8080
+                livenessProbe:
+                  httpGet:
+                    path: /healthz
+                    port: 8080
+                  initialDelaySeconds: 5
+                  periodSeconds: 5
+                  failureThreshold: 3
+      setupAge: 600
+    hints:
+      - text: "`kubectl describe pod -l app=reports`: Liveness probe failed ... connection refused, then Killing."
+        cost: 5
+      - text: "The probe gives up after 5s + 3×5s = 20s, but the app needs ~45s before it listens."
+        cost: 5
+      - text: "Simplest fix: `kubectl get deploy reports -o yaml > r.yaml`, `sed -i 's/initialDelaySeconds: 5/initialDelaySeconds: 60/' r.yaml`, `kubectl apply -f r.yaml`."
+        cost: 10
+    validator:
+      checks:
+        - type: kubeRollout
+          name: reports
+        - type: kubePods
+          selector: app=reports
+          allReady: true
+          maxRestarts: 0
+          message: The reports pod should be Ready and no longer crash-looping.
+        - type: anyOf
+          checks:
+            - { type: kubeResource, kind: Deployment, name: reports, path: spec.template.spec.containers.0.startupProbe, regex: "httpGet|tcpSocket|exec" }
+            - { type: kubeResource, kind: Deployment, name: reports, path: spec.template.spec.containers.0.livenessProbe.initialDelaySeconds, regex: "^([5-9]\\d|\\d{3,})$" }
+          message: Give the app time to start (startupProbe, or initialDelaySeconds of at least 50).
+        - type: kubeResource
+          kind: Deployment
+          name: reports
+          path: spec.template.spec.containers.0.livenessProbe.httpGet.path
+          equals: /healthz
+          message: Keep the liveness probe.
+    xp: 60
+    par: 6
+    solution:
+      - kubectl describe pod -l app=reports
+      - kubectl get deployment reports -o yaml > r.yaml
+      - "sed -i 's/initialDelaySeconds: 5/initialDelaySeconds: 60/' r.yaml"
+      - kubectl apply -f r.yaml
+      - kubectl rollout status deployment/reports
+    explain: |
+      The cleaner fix is a **startupProbe** (`failureThreshold: 12`, `periodSeconds: 5` = up to 60s):
+      liveness stays strict once the app is up, but can't kill it during startup. A long
+      `initialDelaySeconds` also works, at the cost of detecting real hangs later.
+
+  - id: oomkilled
+    title: Exit code 137
+    type: guided
+    prompt: |
+      The `worker` pods restart every few seconds. The logs look perfectly normal.
+
+      **Find the real reason and fix the Deployment so `worker` stays up.** The worker needs about
+      300Mi of memory.
+    initialState:
+      kubeImages:
+        ghcr.io/acme/worker:1.2:
+          memMi: 300
+          cpuM: 120
+          logs: ["worker 1.2 started", "consuming queue orders.created"]
+      kubeManifests: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: worker
+          labels: { app: worker }
+        spec:
+          replicas: 2
+          selector:
+            matchLabels: { app: worker }
+          template:
+            metadata:
+              labels: { app: worker }
+            spec:
+              containers:
+              - name: worker
+                image: ghcr.io/acme/worker:1.2
+                resources:
+                  requests:
+                    memory: 128Mi
+                    cpu: 100m
+                  limits:
+                    memory: 256Mi
+      setupAge: 600
+    hints:
+      - text: "`kubectl describe pod -l app=worker` → Last State: Terminated, Reason: OOMKilled, Exit Code: 137."
+        cost: 5
+      - text: "The container uses more memory than its limit, so the kernel kills it. Raise the limit."
+        cost: 5
+      - text: "`kubectl set resources deployment/worker --limits=memory=512Mi`, then `kubectl rollout status deployment/worker`."
+        cost: 10
+    validator:
+      checks:
+        - type: kubeRollout
+          name: worker
+          replicas: 2
+        - type: kubePods
+          selector: app=worker
+          allReady: true
+          maxRestarts: 0
+        - type: kubeResource
+          kind: Deployment
+          name: worker
+          path: spec.template.spec.containers.0.resources.limits.memory
+          regex: "^(3[2-9]\\d|[4-9]\\d\\d|\\d{4,})Mi$|^[1-9]\\d*Gi$"
+          message: The memory limit should be comfortably above 300Mi.
+    xp: 50
+    par: 4
+    solution:
+      - kubectl describe pod -l app=worker
+      - kubectl set resources deployment/worker --limits=memory=512Mi
+      - kubectl rollout status deployment/worker
+    explain: |
+      Exit code 137 = 128 + 9: the process was killed with SIGKILL — here by the kernel's OOM killer
+      because the container went over its memory limit. The app never logged anything because it never
+      got the chance. Limits should be set from measured usage (`kubectl top pods`) plus headroom.
+
+  - id: k8s-troubleshooting-check
+    title: "Knowledge check: probes & statuses"
+    type: quiz
+    prompt: Match symptoms to causes, the way an on-call engineer has to.
+    xp: 30
+    questions:
+      - kind: single
+        prompt: "A pod is Running but READY 0/1. What's happening?"
+        options:
+          - The liveness probe is failing, so it restarts
+          - The readiness probe is failing, so it gets no Service traffic
+          - It can't pull its image
+          - It's out of memory
+        answer: 1
+      - kind: single
+        prompt: Which probe should a slow-starting Java app get so liveness doesn't kill it during warm-up?
+        options: [readinessProbe, startupProbe, a second livenessProbe, none - remove all probes]
+        answer: 1
+      - kind: number
+        prompt: A container was OOMKilled. Which exit code do you see in Last State?
+        answer: 137
+      - kind: single
+        prompt: "`kubectl describe pod` shows `0/3 nodes are available: 3 Insufficient cpu`. Fix?"
+        options:
+          - Lower the pod's CPU request (or add nodes)
+          - Raise the CPU limit
+          - Restart the scheduler
+          - Change the image
+        answer: 0
+        explain: The scheduler places pods by their requests; limits don't affect scheduling.
+      - kind: multi
+        prompt: Which show you WHY a pod is in CrashLoopBackOff?
+        options:
+          - kubectl logs POD --previous
+          - kubectl describe pod POD (Last State, Exit Code, events)
+          - kubectl get svc
+          - kubectl get events
+        answers: [0, 1, 3]
+      - kind: order
+        prompt: Put a sensible troubleshooting sequence in order.
+        items:
+          - kubectl get pods (which pods, what status?)
+          - kubectl describe pod (events, states, probes)
+          - kubectl logs (what did the app say?)
+          - Fix the manifest and kubectl apply
+          - kubectl rollout status (verify)
+
+  - id: boss-payments-down
+    title: "Boss: payments are down"
+    type: boss
+    prompt: |
+      🚨 **SEV-1:** checkout fails with "payment service unavailable". Everything lives in the namespace
+      **`shop`**. Last change: someone "cleaned up" the payments config.
+
+      **Bring the `payments` Deployment back up and make `http://payments.shop` answer.** The service
+      needs `API_URL` set to `https://api.stripe.test`.
+    initialState:
+      kubeImages:
+        ghcr.io/acme/payments:4.2:
+          listen: [8080]
+          requireEnv: [API_URL]
+          logs: ["payments 4.2 using provider ${API_URL}", "listening on :8080"]
+          http:
+            /: { body: "payments ok (provider ${API_URL})\n" }
+            /healthz: { body: "ok\n" }
+      kubeManifests: |
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: shop
+        ---
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: payments-config
+          namespace: shop
+        data:
+          api_url: https://api.stripe.test
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: payments
+          namespace: shop
+          labels: { app: payments }
+        spec:
+          replicas: 2
+          selector:
+            matchLabels: { app: payments }
+          template:
+            metadata:
+              labels: { app: payments }
+            spec:
+              containers:
+              - name: payments
+                image: ghcr.io/acme/payments:4.2
+                ports:
+                - containerPort: 8080
+                env:
+                - name: API_URL
+                  valueFrom:
+                    configMapKeyRef:
+                      name: payments-config
+                      key: API_URL
+                readinessProbe:
+                  httpGet:
+                    path: /healthz
+                    port: 8080
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: payments
+          namespace: shop
+        spec:
+          selector: { app: payments }
+          ports:
+          - port: 80
+            targetPort: 9090
+      setupAge: 900
+    hints: []
+    validator:
+      checks:
+        - type: kubeRollout
+          name: payments
+          namespace: shop
+          replicas: 2
+        - type: kubeHttp
+          service: payments
+          namespace: shop
+          contains: payments ok (provider https://api.stripe.test)
+          message: http://payments.shop should answer with the stripe provider.
+    xp: 200
+    par: 10
+    solution:
+      - kubectl get pods -n shop
+      - kubectl describe pod -n shop -l app=payments
+      - kubectl create configmap payments-config -n shop --from-literal=API_URL=https://api.stripe.test --dry-run=client -o yaml | kubectl apply -f -
+      - kubectl rollout status deployment/payments -n shop
+      - kubectl get endpoints payments -n shop
+      - kubectl get service payments -n shop -o yaml > svc.yaml
+      - "sed -i 's/targetPort: 9090/targetPort: 8080/' svc.yaml"
+      - kubectl apply -f svc.yaml
+    explain: |
+      Two separate breakages: the "cleanup" renamed the ConfigMap key to `api_url`, so the pods couldn't
+      even start (**CreateContainerConfigError**: couldn't find key API_URL). Keys are case-sensitive and
+      must match `configMapKeyRef.key`. Then the Service pointed at **targetPort 9090** while the app
+      listens on 8080 — `get endpoints` showed the wrong port. Always pass `-n shop` (or set it with
+      `kubectl config set-context --current --namespace=shop`).

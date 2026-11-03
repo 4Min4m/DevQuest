@@ -1,0 +1,522 @@
+id: k8s-services-config
+title: Services & configuration
+branch: k8s-networking
+prerequisites: [k8s-workloads]
+sources:
+  - 05-Kubernetes/03-Networking
+  - 05-Kubernetes/05-Configuration
+theory: |
+  Pods come and go and change IPs. A **Service** gives a stable name and virtual IP and load-balances
+  to the **ready** pods whose labels match its `selector` (its **Endpoints**).
+
+  | Type | Reachable from |
+  |---|---|
+  | `ClusterIP` (default) | inside the cluster: `http://NAME` (same namespace) or `NAME.NAMESPACE.svc.cluster.local` |
+  | `NodePort` | also from outside, on every node's IP at a port 30000–32767 |
+  | `LoadBalancer` | a cloud load balancer in front of the NodePorts |
+
+  `port` is what clients use; `targetPort` is the container's port. A Service with **no endpoints**
+  almost always means its selector doesn't match the pod labels (or no pod is ready).
+
+  Config doesn't belong in the image:
+  - **ConfigMap** — plain settings; **Secret** — credentials (base64-*encoded*, not encrypted: protect
+    them with RBAC and etcd encryption)
+  - consume them as **env vars** (`envFrom`, or `valueFrom.configMapKeyRef` / `secretKeyRef`) — read
+    once at start, so restart to pick up changes — or as **files** from a volume, which update in place.
+
+  | | |
+  |---|---|
+  | `kubectl expose deploy/web --port=80 --target-port=8080` | create a ClusterIP Service |
+  | `kubectl get endpoints web` | which pod IPs receive traffic |
+  | `kubectl run tmp --rm -it --image=curlimages/curl --restart=Never -- curl -s http://web` | test from inside |
+  | `kubectl create configmap NAME --from-literal=K=V` / `create secret generic ...` | config objects |
+  | `kubectl set env deploy/web --from=configmap/NAME` | wire config into env vars |
+missions:
+  - id: expose-clusterip
+    title: Give the API a stable address
+    type: guided
+    prompt: |
+      Two `api` pods run on port 8080, but other apps can't find them: pod IPs change on every restart.
+
+      **Create a ClusterIP Service `api` (port 80 → container port 8080)** and prove it works by
+      calling `http://api` from a temporary pod inside the cluster.
+    initialState:
+      kubeImages:
+        ghcr.io/acme/api:2.0:
+          listen: [8080]
+          logs: ["api 2.0 listening on :8080"]
+          http: { "/": { body: "{\"service\":\"api\",\"pod\":\"{pod}\",\"status\":\"ok\"}\n" } }
+      kubeManifests: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: api
+          labels: { app: api }
+        spec:
+          replicas: 2
+          selector:
+            matchLabels: { app: api }
+          template:
+            metadata:
+              labels: { app: api }
+            spec:
+              containers:
+              - name: api
+                image: ghcr.io/acme/api:2.0
+                ports:
+                - containerPort: 8080
+    hints:
+      - text: "`kubectl expose deployment api --port=80 --target-port=8080` creates the Service."
+        cost: 5
+      - text: "`kubectl get endpoints api` should list both pod IPs on :8080."
+        cost: 5
+      - text: "`kubectl run tmp --rm -it --image=curlimages/curl --restart=Never -- curl -s http://api`"
+        cost: 10
+    validator:
+      checks:
+        - type: kubeEndpoints
+          service: api
+          min: 2
+          message: Service `api` should have both pods as endpoints.
+        - type: kubeHttp
+          service: api
+          contains: '"status":"ok"'
+        - type: outputContains
+          text: '"service":"api"'
+          message: Call http://api from a pod inside the cluster.
+    xp: 50
+    par: 4
+    solution:
+      - kubectl expose deployment api --port=80 --target-port=8080
+      - kubectl get endpoints api
+      - kubectl run tmp --rm -it --image=curlimages/curl --restart=Never -- curl -s http://api
+    explain: |
+      The Service got a virtual IP (`kubectl get svc api`) and a DNS name from CoreDNS. kube-proxy on
+      every node forwards connections for that IP to one of the endpoint pods — run the curl a few
+      times and the `pod` field changes.
+
+  - id: no-endpoints
+    title: The Service with no endpoints
+    type: guided
+    prompt: |
+      `web` pods are running, the `web` Service exists... and every request times out. Its manifest is
+      `~/k8s/web-svc.yaml`.
+
+      **Find out why the Service doesn't send traffic to the pods, fix the manifest and apply it.**
+    initialState:
+      files:
+        /home/student/k8s/web-svc.yaml: |
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: web
+          spec:
+            selector:
+              app: webapp
+            ports:
+            - port: 80
+              targetPort: 80
+      kubeManifests: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: web
+          labels: { app: web }
+        spec:
+          replicas: 2
+          selector:
+            matchLabels: { app: web }
+          template:
+            metadata:
+              labels: { app: web }
+            spec:
+              containers:
+              - name: nginx
+                image: nginx:1.27
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: web
+        spec:
+          selector:
+            app: webapp
+          ports:
+          - port: 80
+            targetPort: 80
+    hints:
+      - text: "`kubectl get endpoints web` shows `<none>`. Compare `kubectl describe svc web` (Selector) with `kubectl get pods --show-labels`."
+        cost: 5
+      - text: "The selector says `app: webapp`, the pods are labeled `app: web`."
+        cost: 5
+      - text: "`sed -i 's/app: webapp/app: web/' k8s/web-svc.yaml`, then `kubectl apply -f k8s/web-svc.yaml`."
+        cost: 10
+    validator:
+      checks:
+        - type: kubeEndpoints
+          service: web
+          min: 2
+        - type: kubeHttp
+          service: web
+          contains: Welcome to nginx
+        - type: fileContains
+          path: /home/student/k8s/web-svc.yaml
+          regex: "app: web\\n"
+          message: Fix the manifest file too, so Git has the right version.
+    xp: 50
+    par: 5
+    solution:
+      - kubectl get endpoints web
+      - kubectl get pods --show-labels
+      - "sed -i 's/app: webapp/app: web/' k8s/web-svc.yaml"
+      - kubectl apply -f k8s/web-svc.yaml
+    explain: |
+      Services find pods **only** by labels. An empty `ENDPOINTS` column is the first thing to check
+      when a Service "doesn't work": either the selector matches nothing, or the matching pods aren't Ready.
+
+  - id: nodeport
+    title: Reach the cluster from outside
+    type: guided
+    prompt: |
+      QA wants to open the `shop` app from their laptop, outside the cluster.
+
+      **Create a NodePort Service `shop` on node port `30080`** (port 80 → pods' port 80) and fetch the
+      page from this machine using a node's IP.
+    initialState:
+      kubeManifests: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: shop
+          labels: { app: shop }
+        spec:
+          replicas: 2
+          selector:
+            matchLabels: { app: shop }
+          template:
+            metadata:
+              labels: { app: shop }
+            spec:
+              containers:
+              - name: nginx
+                image: nginx:1.27
+                ports:
+                - containerPort: 80
+    hints:
+      - text: "`kubectl create service nodeport shop --tcp=80:80 --node-port=30080` (its selector is `app=shop`)."
+        cost: 5
+      - text: "`kubectl get nodes -o wide` shows the INTERNAL-IP of each node."
+        cost: 5
+      - text: "`curl -s 172.18.0.3:30080` — any node works, even one without a shop pod."
+        cost: 10
+    validator:
+      checks:
+        - type: kubeResource
+          kind: Service
+          name: shop
+          path: spec.type
+          equals: NodePort
+        - type: kubeResource
+          kind: Service
+          name: shop
+          path: spec.ports.0.nodePort
+          equals: "30080"
+        - type: kubeEndpoints
+          service: shop
+          min: 2
+        - type: outputContains
+          text: Welcome to nginx
+          message: Fetch the page from this machine through a node IP and the NodePort.
+    xp: 50
+    par: 4
+    solution:
+      - kubectl create service nodeport shop --tcp=80:80 --node-port=30080
+      - kubectl get nodes -o wide
+      - curl -s 172.18.0.3:30080
+    explain: |
+      A NodePort opens the same port on **every** node; kube-proxy forwards it to a ready pod wherever it
+      runs. In the cloud you'd usually use `type: LoadBalancer` (a NodePort with a cloud load balancer in
+      front) or an Ingress — that's next step's topic.
+
+  - id: configmap-env
+    title: Configuration from a ConfigMap
+    type: guided
+    prompt: |
+      The `greeter` app crash-loops: it needs a `GREETING` environment variable, and hard-coding config
+      in the image is not allowed.
+
+      **Create a ConfigMap `greeter-config` with `GREETING=Hello`, inject it into the `greeter`
+      Deployment as environment variables, and make sure the Service answers.**
+    initialState:
+      kubeImages:
+        ghcr.io/acme/greeter:1.0:
+          listen: [8080]
+          requireEnv: [GREETING]
+          requireEnvMessage: "FATAL: GREETING is not set (expected from the greeter-config ConfigMap)"
+          logs: ["greeter ready, GREETING=${GREETING}"]
+          http: { "/": { body: "${GREETING}, world! (from {pod})\n" } }
+      kubeManifests: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: greeter
+          labels: { app: greeter }
+        spec:
+          replicas: 2
+          selector:
+            matchLabels: { app: greeter }
+          template:
+            metadata:
+              labels: { app: greeter }
+            spec:
+              containers:
+              - name: greeter
+                image: ghcr.io/acme/greeter:1.0
+                ports:
+                - containerPort: 8080
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: greeter
+        spec:
+          selector: { app: greeter }
+          ports:
+          - port: 80
+            targetPort: 8080
+    hints:
+      - text: "`kubectl logs deploy/greeter` (or `-l app=greeter`) shows what's missing."
+        cost: 5
+      - text: "`kubectl create configmap greeter-config --from-literal=GREETING=Hello`"
+        cost: 5
+      - text: "`kubectl set env deployment/greeter --from=configmap/greeter-config`, then `kubectl rollout status deployment/greeter`."
+        cost: 10
+    validator:
+      checks:
+        - type: kubeResource
+          kind: ConfigMap
+          name: greeter-config
+          path: data.GREETING
+          equals: Hello
+        - type: kubeRollout
+          name: greeter
+          replicas: 2
+        - type: kubeHttp
+          service: greeter
+          contains: Hello, world
+        - type: kubeResource
+          kind: Deployment
+          name: greeter
+          path: spec.template.spec.containers.0
+          regex: "configMapKeyRef|configMapRef"
+          message: Take the value from the ConfigMap (not a hard-coded env value).
+    xp: 50
+    par: 5
+    solution:
+      - kubectl logs -l app=greeter --tail=1
+      - kubectl create configmap greeter-config --from-literal=GREETING=Hello
+      - kubectl set env deployment/greeter --from=configmap/greeter-config
+      - kubectl rollout status deployment/greeter
+    explain: |
+      `set env --from` added an env var with `valueFrom.configMapKeyRef` and rolled the pods. Env vars are
+      read when the container starts: changing the ConfigMap later needs `kubectl rollout restart` —
+      files mounted from a ConfigMap volume update on their own.
+
+  - id: secret-db
+    title: A password belongs in a Secret
+    type: guided
+    prompt: |
+      The `db` Deployment (Postgres) crash-loops right after starting.
+
+      **Read why, then store a password in a Secret named `db-credentials` (key `POSTGRES_PASSWORD`) and
+      give it to the `db` container from that Secret.** `db` must end up running.
+    initialState:
+      kubeManifests: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: db
+          labels: { app: db }
+        spec:
+          replicas: 1
+          selector:
+            matchLabels: { app: db }
+          template:
+            metadata:
+              labels: { app: db }
+            spec:
+              containers:
+              - name: postgres
+                image: postgres:17
+                ports:
+                - containerPort: 5432
+    hints:
+      - text: "`kubectl logs deploy/db` prints the exact reason."
+        cost: 5
+      - text: "`kubectl create secret generic db-credentials --from-literal=POSTGRES_PASSWORD=...`"
+        cost: 5
+      - text: "`kubectl set env deployment/db --from=secret/db-credentials`, then `kubectl rollout status deployment/db`."
+        cost: 10
+    validator:
+      checks:
+        - type: kubeResource
+          kind: Secret
+          name: db-credentials
+          path: data
+          regex: POSTGRES_PASSWORD
+        - type: kubeResource
+          kind: Deployment
+          name: db
+          path: spec.template.spec.containers.0.env
+          regex: secretKeyRef
+          message: The password should come from the Secret (secretKeyRef), not a plain value.
+        - type: kubeRollout
+          name: db
+    xp: 50
+    par: 4
+    solution:
+      - kubectl logs deploy/db
+      - kubectl create secret generic db-credentials --from-literal=POSTGRES_PASSWORD=s3cr3t-pass
+      - kubectl set env deployment/db --from=secret/db-credentials
+      - kubectl rollout status deployment/db
+    explain: |
+      Try `kubectl get secret db-credentials -o yaml`: the value is only base64-encoded (`echo ... |
+      base64 -d` reveals it). Secrets are safe only with RBAC limiting who can read them and encryption
+      at rest for etcd — or an external secret manager.
+
+  - id: k8s-services-check
+    title: "Knowledge check: services & config"
+    type: quiz
+    prompt: Service types, DNS names and how config reaches containers.
+    xp: 30
+    questions:
+      - kind: single
+        prompt: A pod in namespace `shop` wants Service `payments` in namespace `billing`. Which address works?
+        options: ["http://payments", "http://payments.billing", "http://billing.payments", "http://payments.shop.svc"]
+        answer: 1
+        explain: "Short names resolve in the pod's own namespace; NAME.NAMESPACE (or the full NAME.NAMESPACE.svc.cluster.local) reaches others."
+      - kind: single
+        prompt: "`kubectl get endpoints web` shows `<none>` but the pods are Running. Most likely?"
+        options:
+          - The Service's selector doesn't match the pod labels (or no pod is Ready)
+          - CoreDNS is down
+          - The image is wrong
+          - The Service needs type NodePort
+        answer: 0
+      - kind: multi
+        prompt: Which statements about Secrets are true?
+        options:
+          - Values are base64-encoded, not encrypted
+          - Anyone who can read the Secret can decode it
+          - Secrets are always encrypted in etcd by default
+          - RBAC should restrict who can get them
+        answers: [0, 1, 3]
+      - kind: single
+        prompt: You changed a ConfigMap used via env vars. When do running pods see the new values?
+        options:
+          - Immediately
+          - Within a minute, automatically
+          - Only after the pods restart (e.g. kubectl rollout restart)
+          - Never — you must delete the Deployment
+        answer: 2
+      - kind: number
+        prompt: What is the lowest port number a NodePort can use by default?
+        answer: 30000
+      - kind: single
+        prompt: "In a Service port `{port: 80, targetPort: 8080}`, what is 8080?"
+        options:
+          - The port clients connect to
+          - The port the container listens on
+          - The node port
+          - The health check port
+        answer: 1
+
+  - id: boss-blank-page
+    title: "Boss: the launch page is down"
+    type: boss
+    prompt: |
+      🚨 Marketing's spring sale page goes live in 10 minutes. The `site` Deployment should serve the
+      HTML stored in the ConfigMap `site-content` (mounted into nginx), exposed through the `site`
+      Service — but nothing works.
+
+      **Make `http://site` serve the "Spring Sale" page.** Don't change the page content.
+    initialState:
+      kubeManifests: |
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: site-content
+        data:
+          index.html: "<html><body><h1>Spring Sale - 30% off everything</h1></body></html>\n"
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: site
+          labels: { app: site }
+        spec:
+          replicas: 2
+          selector:
+            matchLabels: { app: site }
+          template:
+            metadata:
+              labels: { app: site }
+            spec:
+              containers:
+              - name: nginx
+                image: nginx:1.27
+                ports:
+                - containerPort: 80
+                volumeMounts:
+                - name: html
+                  mountPath: /usr/share/nginx/html
+              volumes:
+              - name: html
+                configMap:
+                  name: site-html
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: site
+        spec:
+          selector: { app: site }
+          ports:
+          - port: 80
+            targetPort: 8080
+      setupAge: 900
+    hints: []
+    validator:
+      checks:
+        - type: kubeHttp
+          service: site
+          contains: Spring Sale
+          message: http://site should serve the Spring Sale page.
+        - type: kubeRollout
+          name: site
+          replicas: 2
+      guards:
+        - type: kubeResource
+          kind: ConfigMap
+          name: site-content
+          path: data.index\.html
+          regex: "Spring Sale"
+          message: Don't change or delete the page content.
+    xp: 150
+    par: 11
+    solution:
+      - kubectl get pods
+      - kubectl describe pod -l app=site
+      - kubectl get deployment site -o yaml > site.yaml
+      - "sed -i 's/name: site-html/name: site-content/' site.yaml"
+      - kubectl apply -f site.yaml
+      - kubectl rollout status deployment/site
+      - kubectl get endpoints site
+      - kubectl get service site -o yaml > svc.yaml
+      - "sed -i 's/targetPort: 8080/targetPort: 80/' svc.yaml"
+      - kubectl apply -f svc.yaml
+    explain: |
+      Layer one: the pods sat in **ContainerCreating** with a `FailedMount` event — the volume referenced a
+      ConfigMap `site-html` that doesn't exist. Layer two: once pods were Ready, the Service forwarded to
+      **targetPort 8080** while nginx listens on 80, so connections were refused. `describe pod` (events)
+      and `get endpoints` (ports) are the two commands that found both.

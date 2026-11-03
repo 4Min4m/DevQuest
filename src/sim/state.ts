@@ -1,6 +1,7 @@
 import type { DockerState } from './docker/types';
 import type { NetState } from './netsim/types';
 import type { GitState } from './git/types';
+import type { KubeState } from './kube/types';
 import type { SystemdState } from './systemd/types';
 import { makeDir, makeFile } from './vfs/vfs';
 import type { DirNode, FsNode } from './vfs/types';
@@ -42,6 +43,8 @@ export interface SimState {
   net?: NetState;
   /** Load, memory and CPU figures for top/free/uptime/vmstat. */
   perf?: PerfState;
+  /** The Kubernetes cluster kubectl talks to (created on first use). */
+  kube?: KubeState;
   /** Git repositories on this machine and the simulated remotes it can reach. */
   git?: GitState;
   /** Resource limits (ulimit). */
@@ -59,6 +62,8 @@ export interface ContainerContext {
   host: SimState;
   /** Commands this container's image doesn't ship. */
   lacks: string[];
+  /** Set when this is a Kubernetes pod (kubectl exec / run): enables cluster DNS. */
+  kubePod?: { namespace: string; name: string };
 }
 
 export interface UserEntry {

@@ -85,7 +85,7 @@ export const grep: CommandDef = {
   run(ctx) {
     const p = parseArgs(ctx, {
       flags: 'ivnclLrRwxEFohHqs',
-      valued: 'e',
+      valued: 'eABC',
       long: {
         'ignore-case': 'i',
         'invert-match': 'v',
@@ -105,7 +105,7 @@ export const grep: CommandDef = {
         silent: 'q',
         'no-messages': 's',
       },
-      longValued: { regexp: 'e' },
+      longValued: { regexp: 'e', 'after-context': 'A', 'before-context': 'B', context: 'C' },
       usageExit: 2,
     });
     if (typeof p === 'number') return p;
@@ -161,22 +161,50 @@ export const grep: CommandDef = {
     const showName = !f.has('h') && (f.has('H') || inputs.length > 1 || recursive);
     let anyMatch = false;
     let listedWithoutMatch = false;
+    const num = (k: string) => {
+      const v = p.values[k] ?? p.values.C;
+      return v === undefined ? 0 : Math.max(0, Number(v) || 0);
+    };
+    const after = num('A');
+    const before = num('B');
+    const context = after > 0 || before > 0;
+    let printedAny = false;
     for (const input of inputs) {
       let count = 0;
-      splitLines(input.content).forEach((line, idx) => {
+      const lines = splitLines(input.content);
+      let lastPrinted = -1;
+      let afterLeft = 0;
+      lines.forEach((line, idx) => {
         re.lastIndex = 0;
         const matched = re.test(line) !== f.has('v');
-        if (!matched) return;
+        const quiet = f.has('q') || f.has('l') || f.has('L') || f.has('c');
+        const emit = (i: number, sep: string) => {
+          if (context && lastPrinted >= 0 && i > lastPrinted + 1) ctx.out('--\n');
+          else if (context && lastPrinted < 0 && printedAny && i >= 0) ctx.out('--\n');
+          ctx.out((showName ? input.name + sep : '') + (f.has('n') ? `${i + 1}${sep}` : '') + lines[i] + '\n');
+          lastPrinted = i;
+          printedAny = true;
+        };
+        if (!matched) {
+          if (!quiet && afterLeft > 0) {
+            emit(idx, '-');
+            afterLeft--;
+          }
+          return;
+        }
         count++;
         anyMatch = true;
-        if (f.has('q') || f.has('l') || f.has('L') || f.has('c')) return;
+        if (quiet) return;
+        if (context) {
+          for (let b = Math.max(lastPrinted + 1, idx - before); b < idx; b++) emit(b, '-');
+          afterLeft = after;
+        }
         const prefix = (showName ? input.name + ':' : '') + (f.has('n') ? `${idx + 1}:` : '');
         if (f.has('o') && !f.has('v')) {
           re.lastIndex = 0;
           for (const m of line.matchAll(re)) if (m[0]) ctx.out(prefix + m[0] + '\n');
-        } else {
-          ctx.out(prefix + line + '\n');
-        }
+        } else if (context) emit(idx, ':');
+        else ctx.out(prefix + line + '\n');
       });
       if (f.has('q')) continue;
       if (f.has('c')) ctx.out((showName ? input.name + ':' : '') + count + '\n');

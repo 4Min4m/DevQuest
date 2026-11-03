@@ -5,6 +5,7 @@
 import type { Disk, HttpResponse, PerfState, Process } from '../sim/state';
 import type { DnsRecord, RemoteHost } from '../sim/netsim/types';
 import type { BinarySpec } from '../sim/systemd/types';
+import type { AppSpec } from '../sim/kube/types';
 
 export type BranchId =
   // theory tracks (knowledge checks)
@@ -31,6 +32,8 @@ export type BranchId =
   | 'git-branching'
   | 'git-remotes'
   | 'kubernetes'
+  | 'k8s-networking'
+  | 'k8s-troubleshooting'
   | 'cicd'
   | 'cloud-iac'
   | 'observability'
@@ -177,6 +180,16 @@ export type Check = CheckBase &
         exists?: boolean;
       }
     | { type: 'gitStash'; path: string; count: number }
+    // ---- Kubernetes (namespace defaults to "default")
+    /** An object exists (or not); `path` (dotted, e.g. spec.replicas) compared to `equals` / `regex`. */
+    | { type: 'kubeResource'; kind: string; name: string; namespace?: string; exists?: boolean; path?: string; equals?: string; regex?: string }
+    /** Pods matching a label selector ("app=web"): at least `ready` Ready, all Ready, a STATUS, no crash loop. */
+    | { type: 'kubePods'; selector: string; namespace?: string; ready?: number; allReady?: boolean; status?: string; maxRestarts?: number }
+    /** A Deployment is fully rolled out (all replicas updated and available), optionally with this image. */
+    | { type: 'kubeRollout'; name: string; namespace?: string; image?: string; replicas?: number }
+    | { type: 'kubeEndpoints'; service: string; namespace?: string; min?: number }
+    /** A request through a Service (as from another pod) succeeds. */
+    | { type: 'kubeHttp'; service: string; namespace?: string; port?: number; path?: string; contains?: string }
   );
 
 export type CheckType = Check['type'];
@@ -230,6 +243,10 @@ export interface InitialStateSpec {
    * runs so setup commands can clone and push to them. `protected` branches refuse direct pushes.
    */
   gitHosted?: { url: string; branch?: string; protected?: string[] }[];
+  /** Mission-defined container images in the cluster registry, by reference. */
+  kubeImages?: Record<string, AppSpec>;
+  /** YAML applied to the cluster before setup (hidden from the learner). */
+  kubeManifests?: string;
   /** Simulated seconds that pass after setup (so containers look "Up 5 minutes"). Default 300. */
   setupAge?: number;
 }

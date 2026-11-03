@@ -14,10 +14,11 @@ describe('lesson catalog', () => {
       'foundations', 'networking', 'storage-databases', 'system-design', 'sre',
       'systemd', 'network-tools', 'performance',
       'version-control', 'git-branching', 'git-remotes',
+      'kubernetes', 'k8s-networking', 'k8s-troubleshooting',
     ]);
     const missions = lessons.flatMap((l) => l.missions);
-    expect(missions.filter((m) => m.type === 'guided' || m.type === 'free')).toHaveLength(36); // 8 Linux + 8 Docker + 7 services/network/performance + 13 Git
-    expect(missions.filter((m) => m.type === 'boss')).toHaveLength(10);
+    expect(missions.filter((m) => m.type === 'guided' || m.type === 'free')).toHaveLength(49); // 8 Linux + 8 Docker + 7 services/network/performance + 13 Git + 13 Kubernetes
+    expect(missions.filter((m) => m.type === 'boss')).toHaveLength(13);
     expect(missions.filter((m) => m.type === 'quiz').length).toBeGreaterThanOrEqual(20);
   });
 

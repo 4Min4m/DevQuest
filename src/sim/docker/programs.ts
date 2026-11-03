@@ -329,7 +329,7 @@ function runOnce(line: string): Program {
   };
 }
 
-const HELLO = `
+export const HELLO = `
 Hello from Docker!
 This message shows that your installation appears to be working correctly.
 

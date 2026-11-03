@@ -6,7 +6,7 @@ const BRANCHES = [
   'linux-basics', 'files-permissions', 'processes', 'text-processing', 'docker-basics',
   'images-dockerfile', 'volumes-networks', 'compose', 'troubleshooting',
   'systemd', 'network-tools', 'performance',
-  'version-control', 'git-branching', 'git-remotes', 'kubernetes', 'cicd', 'cloud-iac', 'observability', 'security',
+  'version-control', 'git-branching', 'git-remotes', 'kubernetes', 'k8s-networking', 'k8s-troubleshooting', 'cicd', 'cloud-iac', 'observability', 'security',
 ];
 
 /** Collects every problem in a lesson file, so authors see them all at once. */
@@ -114,6 +114,20 @@ function checkCheck(c: unknown, where: string, p: Problems): void {
       break;
     case 'gitRemote':
       needs('url');
+      break;
+    case 'kubeResource':
+      needs('kind');
+      needs('name');
+      break;
+    case 'kubePods':
+      needs('selector');
+      break;
+    case 'kubeRollout':
+      needs('name');
+      break;
+    case 'kubeEndpoints':
+    case 'kubeHttp':
+      needs('service');
       break;
     case 'diskUsageBelow':
     case 'inodeUsageBelow':

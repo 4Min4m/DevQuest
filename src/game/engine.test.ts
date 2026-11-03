@@ -291,3 +291,48 @@ describe('git validators', () => {
     expect(pass({ type: 'gitRemote', url, linear: true }, ctx)).toBe(true);
   });
 });
+
+describe('kubernetes validators', () => {
+  const spec = {
+    kubeImages: { 'acme/hello:1': { listen: [8080], http: { '/': { body: 'hello from {pod}\n' } } } },
+    kubeManifests: [
+      'apiVersion: apps/v1',
+      'kind: Deployment',
+      'metadata: {name: hello, labels: {app: hello}}',
+      'spec:',
+      '  replicas: 2',
+      '  selector: {matchLabels: {app: hello}}',
+      '  template:',
+      '    metadata: {labels: {app: hello}}',
+      '    spec:',
+      '      containers:',
+      '      - {name: hello, image: "acme/hello:1"}',
+      '---',
+      'apiVersion: v1',
+      'kind: Service',
+      'metadata: {name: hello}',
+      'spec:',
+      '  selector: {app: hello}',
+      '  ports: [{port: 80, targetPort: 8080}]',
+    ].join('\n'),
+  };
+
+  it('rollouts, pods, endpoints, http and resources', () => {
+    const ctx = stateWith([], spec);
+    expect(pass({ type: 'kubeRollout', name: 'hello', replicas: 2, image: 'acme/hello:1' }, ctx)).toBe(true);
+    expect(pass({ type: 'kubeRollout', name: 'hello', image: 'acme/hello:2' }, ctx)).toBe(false);
+    expect(pass({ type: 'kubePods', selector: 'app=hello', ready: 2, allReady: true }, ctx)).toBe(true);
+    expect(pass({ type: 'kubeEndpoints', service: 'hello', min: 2 }, ctx)).toBe(true);
+    expect(pass({ type: 'kubeHttp', service: 'hello', contains: 'hello from hello-' }, ctx)).toBe(true);
+    expect(pass({ type: 'kubeResource', kind: 'Service', name: 'hello', path: 'spec.ports.0.targetPort', equals: '8080' }, ctx)).toBe(true);
+    expect(pass({ type: 'kubeResource', kind: 'ConfigMap', name: 'nope', exists: false }, ctx)).toBe(true);
+    expect(describeCheck({ type: 'kubeRollout', name: 'hello' })).toBe('deployment `hello` should be fully rolled out');
+  });
+
+  it('see breakage after a bad change', () => {
+    const ctx = stateWith(['kubectl set image deploy/hello hello=acme/hello:404', 'kubectl delete svc hello', 'sleep 30'], spec);
+    expect(pass({ type: 'kubeRollout', name: 'hello' }, ctx)).toBe(false);
+    expect(pass({ type: 'kubeHttp', service: 'hello' }, ctx)).toBe(false);
+    expect(pass({ type: 'kubePods', selector: 'app=hello', status: 'ImagePullBackOff' }, ctx)).toBe(true);
+  });
+});

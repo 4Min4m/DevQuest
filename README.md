@@ -34,6 +34,14 @@ browser terminal. No backend, no runtime network calls. See [CLAUDE.md](CLAUDE.m
   `--force-with-lease`, protected branches). Three lessons — Git fundamentals, Branching & merging,
   Remotes & teamwork — with 13 missions, 3 knowledge checks and 3 boss fights (lost work after a
   `reset --hard`, a release-day merge, a Friday hotfix with a rejected push).
+- **Step 10 done:** a **Kubernetes cluster simulator** (3-node kind-style cluster, time-stepped
+  controllers: Deployments/ReplicaSets with real rolling updates and rollbacks, DaemonSets, Jobs, a
+  scheduler with requests and taints, kubelets with image pulls, CrashLoopBackOff back-off, OOMKilled,
+  liveness/readiness/startup probes, ConfigMap/Secret env and volumes, Services with endpoints,
+  cluster DNS, NodePorts and port-forward) and `kubectl` (get/describe/logs/exec/run/create/apply/
+  delete/edit/expose/scale/set/rollout/label/top/port-forward/config, `-o yaml|json|name|jsonpath|
+  custom-columns`, strict manifest validation). Three lessons — Pods & Deployments, Services &
+  configuration, Probes & troubleshooting — with 13 missions, 3 knowledge checks and 3 boss fights.
 
 ### Roadmap (from the knowledge vault)
 
@@ -41,7 +49,8 @@ browser terminal. No backend, no runtime network calls. See [CLAUDE.md](CLAUDE.m
 |---|---|---|
 | ~~8~~ | 03 Linux (rest), 02 Networking tools | ✅ done (see above) |
 | ~~9~~ | 01 Version Control | ✅ done (see above) |
-| 10–11 | 05 Kubernetes | `kubectl` simulator: workloads, services, config, probes, scheduling, HPA, storage, RBAC, Helm |
+| ~~10~~ | 05 Kubernetes (1) | ✅ done (see above) |
+| 11 | 05 Kubernetes (2) | storage (PV/PVC/StatefulSet), scheduling (taints, affinity, drain), HPA, Ingress, NetworkPolicy, RBAC, Helm |
 | 12 | 06 CI/CD, GitOps | Pipeline runner (GitHub Actions / GitLab CI), deployment strategies, ArgoCD-style sync |
 | 13 | 07 Cloud, 08 IaC | Terraform, Ansible, mock AWS |
 | 14 | 09 Observability, 10 Security | PromQL, logs, alerting, DevSecOps + incident boss fights |
@@ -74,6 +83,8 @@ src/sim/netsim/             DNS zone, /etc/hosts resolution, remote hosts; dig, 
 src/sim/systemd/            unit-file parser, service manager (failure modes), systemctl, journalctl
 src/sim/disk.ts             disk usage per mount (bytes + inodes) and the ENOSPC guard
 src/sim/git/                Git: objects (SHA-1), diff/merge3, repo plumbing, ops, cli/ (porcelain)
+src/sim/kube/               Kubernetes: object store, controllers (time-stepped reconcile), images,
+                            manifest admission, printers, net (DNS / NodePort / port-forward), cli/
 src/game/                   mission engine: initial-state builder, validators, MissionSession;
                             progress.ts (XP, levels, streak, hearts, unlocking, skill tree),
                             store.ts (Zustand store persisted to localStorage)
@@ -99,6 +110,12 @@ branch switch checkout merge rebase cherry-pick revert stash remote fetch pull p
 hash-object rev-parse ls-files`, plus `git -C DIR` and `git -c key=value`. Remotes are simulated
 (hosted URLs such as `https://github.com/acme/shop.git`, or local bare repos from `git init --bare`).
 `git rebase -i` and the commit-message editor are not simulated (use `-m`).
+
+`kubectl`: `get describe logs exec run create apply delete edit expose scale set (image|env|resources)
+rollout (status|history|undo|restart|pause|resume) label annotate top port-forward config version
+cluster-info api-resources`. Pods run real images from the offline catalog (nginx serves its html
+directory, postgres needs `POSTGRES_PASSWORD`, busybox runs your command) or mission-defined apps.
+Cluster time advances one second per command; `sleep N` or `kubectl rollout status` wait longer.
 
 `docker`: `run create ps start stop restart kill rm logs exec port inspect images pull rmi`,
 `volume create|ls|rm|inspect|prune`, `network create|ls|rm|inspect|connect|disconnect`,
@@ -191,13 +208,17 @@ Check types: `fileExists`, `fileMissing`, `fileContains` (text / regex / equals)
 for the host: `serviceActive`, `serviceEnabled`, `diskUsageBelow`, `inodeUsageBelow`,
 and for Git: `gitRepo`, `gitBranch`, `gitHead`, `gitClean`, `gitCommit` (message `pattern`),
 `gitFile` (content at a ref), `gitHistory` (count, linear, merges), `gitTracked`, `gitStash`,
-`gitRemote` (remote branch commits / files / tags).
+`gitRemote` (remote branch commits / files / tags), and for Kubernetes: `kubeResource` (any field
+by dotted path), `kubePods` (ready / status / no crash loop), `kubeRollout`, `kubeEndpoints`, `kubeHttp`.
 
 Host scenarios can also set `binaries` (what a program does when systemd runs it: port, required
 env vars/files, DB connection, open-file needs), `dns` records, `remotes` (hosts on the network),
 `perf` (load, memory, CPU), `disks` (sizes and inode counts), `bulkFiles` (thousands of small files)
 a file `size` (an 18 GB log without 18 GB of content), and `gitHosted` (empty hosted remotes that
 `setup` can clone and push to; `protected` branches refuse direct pushes once setup is done).
+`kubeImages` defines container images (ports, HTTP routes, required env, logs, crash exit codes,
+memory use, warm-up time) and `kubeManifests` pre-applies YAML to the cluster; the cluster then runs
+for `setupAge` seconds before the learner arrives.
 A solution line ending in `|| true` marks a step that is expected to fail (like a merge that stops
 on a conflict).
 
