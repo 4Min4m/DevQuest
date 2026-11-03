@@ -1,0 +1,197 @@
+id: sre
+title: SRE practices
+branch: sre
+prerequisites: []
+sources:
+  - 13-SRE-Practices/01-SLI-SLO-SLA
+  - 13-SRE-Practices/02-Toil-Reduction
+  - 13-SRE-Practices/03-Capacity-Planning
+  - 13-SRE-Practices/04-Chaos-Engineering
+theory: |
+  - **SLI** = good events / total events (what users experience). **SLO** = your internal target for it.
+    **SLA** = the external contract, usually looser than the SLO.
+  - **Error budget** = 1 − SLO. With 99.9% over 30 days that's 0.1%, about **43 minutes**. Healthy budget → ship;
+    exhausted → freeze features and fix reliability.
+  - Alert on **burn rate**, not on single SLI dips: 14.4× over 1h pages someone, 3× over 3 days opens a ticket.
+  - **Toil** < 50% of time; justify automation with ROI.
+  - **Capacity planning:** load, stress, soak and spike tests; find what saturates first; model growth.
+  - **Chaos engineering:** steady state → hypothesis → inject → observe → fix. Run GameDays.
+missions:
+  - id: slos
+    title: SLIs, SLOs and error budgets
+    type: quiz
+    prompt: The numbers and decisions behind reliability targets.
+    xp: 30
+    questions:
+      - kind: single
+        prompt: Which of these is an **SLI**?
+        options:
+          - "% of HTTP requests that return a status below 500"
+          - "99.9% of requests under 200 ms over 30 days"
+          - "99.9% monthly availability, or 10% service credit"
+          - "CPU usage of the database"
+        answer: 0
+        explain: The second is an SLO, the third an SLA, and CPU is an infrastructure metric, not user experience.
+      - kind: number
+        prompt: SLO = 99.9% over 30 days with 1,000,000 requests. How many **failed requests** fit in the error budget?
+        answer: 1000
+      - kind: number
+        prompt: How many **minutes** of downtime is a 99.9% SLO over a 30-day window?
+        answer: 43.2
+        tolerance: 0.6
+        unit: minutes
+        explain: 30 × 24 × 60 = 43,200 minutes, and 0.1% of that is 43.2.
+      - kind: single
+        prompt: How should SLO and SLA relate?
+        options:
+          - "The internal SLO is stricter than the external SLA, so you catch problems before customers do"
+          - "The SLA should be stricter than the SLO"
+          - "They should always be identical"
+          - "SLAs are internal, SLOs are external"
+        answer: 0
+      - kind: single
+        prompt: 95% of this month's error budget is gone, with 10 days left. What do you do?
+        options:
+          - "Freeze risky feature releases and focus on reliability work"
+          - "Ship faster to make up for lost time"
+          - "Lower the SLO to 99%"
+          - "Ignore it until the SLA is breached"
+        answer: 0
+      - kind: single
+        prompt: Your error budget is burning at **14.4×** the sustainable rate over the last hour. What does the alert do?
+        options: ["Pages on-call immediately", "Opens a ticket", "Nothing; it's within the SLO", "Sends a weekly report"]
+        answer: 0
+        explain: At 14.4× the 30-day budget is gone in about 2 days. 6× over 6h also pages; 3× over 3 days creates a ticket.
+      - kind: single
+        prompt: Why not set a 100% SLO?
+        options:
+          - "It's infinitely expensive, and any failure breaks it, so teams become afraid to ship"
+          - "Monitoring tools can't display 100%"
+          - "SLAs require a 99% SLO"
+          - "100% is the default in Kubernetes"
+        answer: 0
+      - kind: order
+        prompt: Put the steps for setting SLOs in order.
+        items:
+          - "Identify critical user journeys"
+          - "Define SLIs for each journey"
+          - "Measure current performance"
+          - "Set the SLO slightly below the baseline"
+          - "Choose the window (e.g. 30-day rolling)"
+          - "Build dashboards and burn-rate alerts"
+
+  - id: toil
+    title: Toil reduction
+    type: quiz
+    prompt: Spot toil, eliminate it and make the business case.
+    xp: 20
+    questions:
+      - kind: multi
+        prompt: Which characteristics make a task **toil**?
+        options:
+          - "Manual"
+          - "Repetitive"
+          - "Automatable"
+          - "Grows with the service"
+          - "Needs creative judgment each time"
+        answers: [0, 1, 2, 3]
+      - kind: number
+        prompt: A 30-minute manual task runs 20 times a month. Automating it takes 8 hours. How many hours does it save **net after one year**?
+        answer: 112
+        unit: hours
+        explain: 10 h/month × 12 = 120 h saved, minus 8 h invested = 112 h.
+      - kind: single
+        prompt: Engineers keep manually restarting crashed pods. What eliminates that toil?
+        options: ["Liveness probes, so Kubernetes restarts them", "A runbook", "A dedicated on-call rotation", "Bigger nodes"]
+        answer: 0
+      - kind: single
+        prompt: Your team's toil is above 50%. What do your notes say to do?
+        options:
+          - "Pause new features, find the top 3 toil generators and automate them"
+          - "Hire more people for the toil"
+          - "Accept it as normal operations work"
+          - "Rotate the toil between teams"
+        answer: 0
+
+  - id: capacity
+    title: Capacity planning
+    type: quiz
+    prompt: Load-test types, what to measure and growth math.
+    xp: 25
+    questions:
+      - kind: single
+        prompt: You run normal load for hours to find memory leaks and slow degradation. Which test?
+        options: ["Soak test", "Stress test", "Spike test", "Baseline test"]
+        answer: 0
+      - kind: single
+        prompt: You increase load until the system breaks, to find its limit. Which test?
+        options: ["Stress test", "Soak test", "Load test", "Spike test"]
+        answer: 0
+      - kind: single
+        prompt: You hit the system with a sudden large burst to see how fast autoscaling reacts. Which test?
+        options: ["Spike test", "Soak test", "Baseline test", "Stress test"]
+        answer: 0
+      - kind: number
+        prompt: Traffic is 1,000 RPS and grows **20% month over month**. About how many RPS in **3 months**?
+        answer: 1728
+        tolerance: 2
+        unit: RPS
+        explain: 1000 × 1.2³ = 1728.
+      - kind: number
+        prompt: Today **4 pods** serve 1,000 RPS at 60% CPU. How many pods keep CPU at about 60% at **1,728 RPS**? (round up)
+        answer: 7
+        explain: |
+          Load scales with RPS: 4 × 1728/1000 ≈ 6.9, so **7 pods**.
+          ⚠ Your note `03-Capacity-Planning` computes `4 × (1728/1000) / 0.6 ≈ 12`. That divides by the 60% target a second
+          time, but the 4 pods are *already* at 60%. Dividing by 0.6 only makes sense if you start from 100% utilization.
+      - kind: single
+        prompt: During a load test, what is your current **bottleneck**?
+        options: ["The resource that saturates first", "The service with the most code", "The slowest endpoint in staging", "Always the database"]
+        answer: 0
+      - kind: multi
+        prompt: What should you collect while load testing?
+        options:
+          - "Response time p50 / p95 / p99"
+          - "Error rate"
+          - "DB connection pool utilization"
+          - "Queue depth"
+          - "Number of git commits"
+        answers: [0, 1, 2, 3]
+
+  - id: chaos
+    title: Chaos engineering
+    type: quiz
+    prompt: Prove your failover works before an incident does it for you.
+    xp: 20
+    questions:
+      - kind: order
+        prompt: Put the chaos engineering process in order.
+        items: ["Define steady state", "Form a hypothesis", "Inject the failure", "Observe", "Fix the weaknesses"]
+      - kind: single
+        prompt: Which Kubernetes-native tool do your notes suggest starting with?
+        options: ["Chaos Mesh", "Chaos Monkey", "Gremlin", "AWS FIS"]
+        answer: 0
+      - kind: single
+        prompt: Which Netflix tool randomly terminates cloud instances in production?
+        options: ["Chaos Monkey", "Chaos Mesh", "LitmusChaos", "Spinnaker"]
+        answer: 0
+      - kind: single
+        prompt: What must you define **before** starting an experiment?
+        options:
+          - "A steady-state metric and an abort condition"
+          - "Which engineer to blame"
+          - "A new SLA"
+          - "Nothing; chaos should be random"
+        answer: 0
+      - kind: single
+        prompt: What is a **GameDay**?
+        options:
+          - "A planned team exercise that simulates a real incident to test failover, MTTR and runbooks"
+          - "A day without deployments"
+          - "A hackathon"
+          - "An outage postmortem meeting"
+        answer: 0
+      - kind: single
+        prompt: Which is AWS's managed chaos service?
+        options: ["Fault Injection Simulator (FIS)", "AWS Config", "GuardDuty", "Systems Manager"]
+        answer: 0

@@ -150,18 +150,20 @@ describe('unlocking and skill tree', () => {
     expect(P.nextMissionIndex(p, l1)).toBe(0);
   });
 
-  it('builds all nine branches with statuses', () => {
+  it('builds every branch, grouped into tracks, with statuses', () => {
     let p = P.initialProgress();
     let tree = P.skillTree(p, all);
+    const status = (id: string) => tree.find((b) => b.id === id)!.status;
     expect(tree.map((b) => b.id)).toEqual(P.BRANCHES.map((b) => b.id));
-    expect(tree.map((b) => b.status).slice(0, 3)).toEqual(['available', 'locked', 'coming-soon']);
+    expect(tree.every((b) => P.TRACKS.some((t) => t.id === b.track))).toBe(true);
+    expect([status('linux-basics'), status('files-permissions'), status('processes')]).toEqual(['available', 'locked', 'coming-soon']);
     p = done(p, 'm1');
     tree = P.skillTree(p, all);
-    expect(tree[0].status).toBe('in-progress');
-    expect(tree[0].lessons[0]).toMatchObject({ status: 'in-progress', done: 1, total: 2 });
+    expect(status('linux-basics')).toBe('in-progress');
+    expect(tree.find((b) => b.id === 'linux-basics')!.lessons[0]).toMatchObject({ status: 'in-progress', done: 1, total: 2 });
     p = done(p, 'm2');
     tree = P.skillTree(p, all);
-    expect(tree.map((b) => b.status).slice(0, 2)).toEqual(['complete', 'available']);
+    expect([status('linux-basics'), status('files-permissions')]).toEqual(['complete', 'available']);
   });
 });
 

@@ -269,16 +269,40 @@ export function nextMissionIndex(p: ProgressState, lesson: Lesson): number {
 
 // ------------------------------------------------------------------ skill tree
 
-export const BRANCHES: { id: BranchId; title: string; icon: string }[] = [
-  { id: 'linux-basics', title: 'Linux Basics', icon: '🐧' },
-  { id: 'files-permissions', title: 'Files & Permissions', icon: '🔐' },
-  { id: 'processes', title: 'Processes', icon: '⚙️' },
-  { id: 'text-processing', title: 'Text Processing', icon: '🔎' },
-  { id: 'docker-basics', title: 'Docker Basics', icon: '🐳' },
-  { id: 'images-dockerfile', title: 'Images & Dockerfile', icon: '📦' },
-  { id: 'volumes-networks', title: 'Volumes & Networks', icon: '🔌' },
-  { id: 'compose', title: 'Compose', icon: '🧩' },
-  { id: 'troubleshooting', title: 'Troubleshooting', icon: '🚑' },
+export type TrackId = 'theory' | 'linux' | 'containers' | 'git' | 'kubernetes' | 'delivery' | 'cloud' | 'operations';
+
+export const TRACKS: { id: TrackId; title: string; description: string }[] = [
+  { id: 'theory', title: 'Theory & interviews', description: 'Knowledge checks from your notes. Open any time.' },
+  { id: 'linux', title: 'Linux', description: 'Hands-on in the simulated terminal' },
+  { id: 'containers', title: 'Containers', description: 'Docker, images, Compose and boss fights' },
+  { id: 'git', title: 'Version control', description: 'Git and branching workflows' },
+  { id: 'kubernetes', title: 'Kubernetes', description: 'kubectl, workloads, networking, Helm' },
+  { id: 'delivery', title: 'CI/CD & GitOps', description: 'Pipelines and deployment strategies' },
+  { id: 'cloud', title: 'Cloud & IaC', description: 'Terraform, Ansible, AWS' },
+  { id: 'operations', title: 'Observability & security', description: 'Metrics, logs, alerts, DevSecOps' },
+];
+
+export const BRANCHES: { id: BranchId; title: string; icon: string; track: TrackId }[] = [
+  { id: 'foundations', title: 'Foundations', icon: '🧭', track: 'theory' },
+  { id: 'networking', title: 'Networking', icon: '🌐', track: 'theory' },
+  { id: 'storage-databases', title: 'Storage & Databases', icon: '🗄️', track: 'theory' },
+  { id: 'system-design', title: 'System Design', icon: '🏗️', track: 'theory' },
+  { id: 'sre', title: 'SRE Practices', icon: '📈', track: 'theory' },
+  { id: 'linux-basics', title: 'Linux Basics', icon: '🐧', track: 'linux' },
+  { id: 'files-permissions', title: 'Files & Permissions', icon: '🔐', track: 'linux' },
+  { id: 'processes', title: 'Processes', icon: '⚙️', track: 'linux' },
+  { id: 'text-processing', title: 'Text Processing', icon: '🔎', track: 'linux' },
+  { id: 'docker-basics', title: 'Docker Basics', icon: '🐳', track: 'containers' },
+  { id: 'images-dockerfile', title: 'Images & Dockerfile', icon: '📦', track: 'containers' },
+  { id: 'volumes-networks', title: 'Volumes & Networks', icon: '🔌', track: 'containers' },
+  { id: 'compose', title: 'Compose', icon: '🧩', track: 'containers' },
+  { id: 'troubleshooting', title: 'Troubleshooting', icon: '🚑', track: 'containers' },
+  { id: 'version-control', title: 'Git', icon: '🌿', track: 'git' },
+  { id: 'kubernetes', title: 'Kubernetes', icon: '☸️', track: 'kubernetes' },
+  { id: 'cicd', title: 'CI/CD', icon: '🚀', track: 'delivery' },
+  { id: 'cloud-iac', title: 'Terraform & Cloud', icon: '☁️', track: 'cloud' },
+  { id: 'observability', title: 'Observability', icon: '📊', track: 'operations' },
+  { id: 'security', title: 'Security', icon: '🛡️', track: 'operations' },
 ];
 
 export type NodeStatus = 'locked' | 'available' | 'in-progress' | 'complete' | 'coming-soon';
@@ -294,6 +318,7 @@ export interface BranchNode {
   id: BranchId;
   title: string;
   icon: string;
+  track: TrackId;
   status: NodeStatus;
   lessons: LessonNode[];
 }

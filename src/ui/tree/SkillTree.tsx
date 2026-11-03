@@ -1,5 +1,5 @@
 import { lessons } from '../../content';
-import { heartsLeft, nextMissionIndex, NodeStatus, skillTree } from '../../game/progress';
+import { BranchNode, heartsLeft, nextMissionIndex, NodeStatus, ProgressState, skillTree, TRACKS } from '../../game/progress';
 import { Hearts } from '../lesson/MissionPane';
 import { navigate } from '../router';
 import { TodayPanel } from './TodayPanel';
@@ -20,9 +20,41 @@ export function SkillTree() {
     <div className="skill-tree">
       <TodayPanel />
       <h1>Skill tree</h1>
-      <p className="muted">Finish a branch to unlock the next one. Each lesson gives you 3 hearts; wrong checks and destructive mistakes cost one.</p>
+      <p className="muted">
+        Hands-on branches unlock in order; theory checks are open any time. Each lesson gives you 3 hearts: wrong answers and
+        destructive mistakes cost one.
+      </p>
+      {TRACKS.map((track) => {
+        const branches = tree.filter((b) => b.track === track.id);
+        if (branches.every((b) => b.status === 'coming-soon')) return null;
+        return (
+          <section key={track.id} className="track">
+            <h2 className="track-title">{track.title}</h2>
+            <p className="muted track-desc">{track.description}</p>
+            <BranchList branches={branches} progress={progress} />
+          </section>
+        );
+      })}
+      <section className="track">
+        <h2 className="track-title">Coming next</h2>
+        <ul className="coming-soon-list">
+          {tree
+            .filter((b) => b.status === 'coming-soon')
+            .map((b) => (
+              <li key={b.id}>
+                <span aria-hidden>{b.icon}</span> {b.title}
+              </li>
+            ))}
+        </ul>
+      </section>
+    </div>
+  );
+}
+
+function BranchList({ branches, progress }: { branches: BranchNode[]; progress: ProgressState }) {
+  return (
       <ol className="branches">
-        {tree.map((b) => (
+        {branches.filter((b) => b.status !== 'coming-soon').map((b) => (
           <li key={b.id} className={`branch-node ${b.status}`}>
             <div className="branch-icon" aria-hidden>
               {b.status === 'locked' ? '🔒' : b.icon}
@@ -50,7 +82,7 @@ export function SkillTree() {
                           {n.status !== 'complete' && <Hearts count={heartsLeft(progress, n.lesson.id)} />}
                         </>
                       ) : (
-                        'Finish the previous branch to unlock'
+                        'Finish the previous lesson to unlock'
                       )}
                     </span>
                     <span className="lesson-progress" aria-hidden>
@@ -63,6 +95,5 @@ export function SkillTree() {
           </li>
         ))}
       </ol>
-    </div>
   );
 }

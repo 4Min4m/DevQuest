@@ -1,22 +1,31 @@
 import { describe, expect, it } from 'vitest';
+import { correctAnswerText, grade, QuizSession, Response } from '../game/quiz';
 import { MissionSession } from '../game/session';
+import type { Question } from '../game/types';
 import { brokenGuards, validate } from '../game/validators';
 import { lessons, parseLesson } from './index';
 import { assertCatalog } from './schema';
 
 describe('lesson catalog', () => {
-  it('loads the lessons in skill-tree order', () => {
+  it('loads the hands-on and theory lessons', () => {
     expect(lessons.map((l) => l.branch)).toEqual([
       'linux-basics', 'files-permissions', 'processes', 'text-processing',
       'docker-basics', 'images-dockerfile', 'volumes-networks', 'compose', 'troubleshooting',
+      'foundations', 'networking', 'storage-databases', 'system-design', 'sre',
     ]);
     const missions = lessons.flatMap((l) => l.missions);
-    expect(missions.filter((m) => m.type !== 'boss')).toHaveLength(16); // 8 Linux + 8 Docker
+    expect(missions.filter((m) => m.type === 'guided' || m.type === 'free')).toHaveLength(16); // 8 Linux + 8 Docker
     expect(missions.filter((m) => m.type === 'boss')).toHaveLength(3);
+    expect(missions.filter((m) => m.type === 'quiz').length).toBeGreaterThanOrEqual(20);
   });
 
-  it('every lesson after the first requires the previous branch', () => {
-    lessons.slice(1).forEach((l, i) => expect(l.prerequisites).toEqual([lessons[i].id]));
+  it('hands-on lessons form a chain; theory lessons are open from the start', () => {
+    const handsOn = lessons.filter((l) => l.missions.some((m) => m.type !== 'quiz'));
+    handsOn.slice(1).forEach((l, i) => expect(l.prerequisites).toEqual([handsOn[i].id]));
+    for (const l of lessons.filter((x) => x.missions.every((m) => m.type === 'quiz'))) {
+      expect(l.prerequisites).toEqual([]);
+      expect(l.sources?.length).toBeGreaterThan(0);
+    }
   });
 
   it('has unique mission ids across lessons', () => {
@@ -29,7 +38,63 @@ describe('lesson catalog', () => {
  * Content QA: every mission must start unsolved, and its reference solution
  * must solve it without errors, without breaking guards and within par.
  */
-describe.each(lessons.flatMap((l) => l.missions.map((m) => [`${l.id} / ${m.id}`, m] as const)))('mission %s', (_name, mission) => {
+const terminalMissions = lessons.flatMap((l) => l.missions.filter((m) => m.type !== 'quiz').map((m) => [`${l.id} / ${m.id}`, m] as const));
+const quizMissions = lessons.flatMap((l) => l.missions.filter((m) => m.type === 'quiz').map((m) => [`${l.id} / ${m.id}`, m] as const));
+
+/** The correct response for a question, in the shape the UI submits. */
+function rightAnswer(q: Question): Response {
+  switch (q.kind) {
+    case 'single':
+      return q.answer;
+    case 'multi':
+      return [...q.answers];
+    case 'number':
+      return String(q.answer);
+    case 'order':
+      return q.items.map((_, i) => i);
+    case 'text':
+      return correctAnswerText(q);
+  }
+}
+
+/** A plausible wrong response. */
+function wrongAnswer(q: Question): Response {
+  switch (q.kind) {
+    case 'single':
+      return (q.answer + 1) % q.options.length;
+    case 'multi':
+      return q.answers.length > 1 ? q.answers.slice(1) : [...q.answers, (q.answers[0] + 1) % q.options.length];
+    case 'number':
+      return String(q.answer + (q.tolerance ?? 0) + Math.max(1, Math.abs(q.answer) * 0.5));
+    case 'order':
+      return q.items.map((_, i) => i).reverse();
+    case 'text':
+      return 'definitely not the answer';
+  }
+}
+
+/** Knowledge-check QA: every question is gradable, answers are unambiguous, and a clean run passes. */
+describe.each(quizMissions)('knowledge check %s', (_name, mission) => {
+  it('accepts the right answers and rejects wrong ones', () => {
+    for (const q of mission.questions!) {
+      expect(grade(q, rightAnswer(q)), q.prompt).toBe(true);
+      expect(grade(q, wrongAnswer(q)), q.prompt).toBe(false);
+      if (q.kind === 'single' || q.kind === 'multi') expect(new Set(q.options).size, `duplicate options: ${q.prompt}`).toBe(q.options.length);
+    }
+  });
+
+  it('a perfect run passes with no mistakes, at par', () => {
+    const s = new QuizSession(mission);
+    for (const q of mission.questions!) {
+      expect(s.answer(rightAnswer(q)).correct).toBe(true);
+      s.next();
+    }
+    expect(s.status).toBe('passed');
+    expect(s.stats).toMatchObject({ commands: mission.questions!.length, par: mission.par, failedChecks: 0 });
+  });
+});
+
+describe.each(terminalMissions)('mission %s', (_name, mission) => {
   it('starts unsolved with all guards intact', () => {
     const s = new MissionSession(mission);
     const ctx = { state: s.shell.state, outputs: [] };

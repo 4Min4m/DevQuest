@@ -1,0 +1,285 @@
+id: networking
+title: Networking fundamentals
+branch: networking
+prerequisites: []
+sources:
+  - 02-Networking/01-OSI-and-TCP-IP
+  - 02-Networking/02-DNS
+  - 02-Networking/03-Load-Balancing
+  - 02-Networking/04-HTTP-and-TLS
+  - 02-Networking/05-Service-Mesh
+  - 02-Networking/06-CDN-and-Caching
+theory: |
+  As a DevOps engineer you mostly care about **L3** (IP, routing), **L4** (TCP/UDP) and **L7** (HTTP).
+  "Is it the network?" Check L3/L4 first (ping, TCP connect). If those work but the app fails, it's L7.
+
+  - **CIDR:** `/N` = N fixed network bits. A `/24` has 256 addresses, a `/16` has 65,536.
+  - **DNS:** cache → recursive resolver → root → TLD → authoritative. Mind the **TTL** before migrations.
+  - **Load balancing:** L4 (NLB: TCP, static IP, fast) vs L7 (ALB: paths, headers, TLS termination).
+  - **HTTP:** 502 = LB can't reach the backend, 503 = unhealthy/overloaded, 504 = backend too slow.
+  - **TLS 1.3:** one round trip. **mTLS:** both sides present certificates.
+  - **CDN:** cache close to users; control it with `Cache-Control`; bust caches with hashed file names.
+missions:
+  - id: net-layers
+    title: Layers, TCP and CIDR
+    type: quiz
+    prompt: OSI layers, TCP vs UDP, CIDR math and the ports you should know cold.
+    xp: 25
+    questions:
+      - kind: single
+        prompt: A load balancer routes `/api/*` and `/static/*` to different backends. Which OSI layer does it work at?
+        options: ["Layer 7 (application)", "Layer 4 (transport)", "Layer 3 (network)", "Layer 2 (data link)"]
+        answer: 0
+        explain: Looking at URL paths, headers or cookies requires understanding HTTP, which is L7.
+      - kind: number
+        prompt: How many IP addresses are in a **/24** block?
+        answer: 256
+        explain: 32 − 24 = 8 host bits → 2⁸ = 256.
+      - kind: number
+        prompt: How many addresses does **10.0.1.0/28** contain?
+        answer: 16
+        explain: 4 host bits → 16 addresses (10.0.1.0 – 10.0.1.15).
+      - kind: single
+        prompt: "`ping` to the server works, but `curl http://server:8080` fails. Where is the problem most likely?"
+        options: ["Layer 7 / the application (or nothing listening on the port)", "Layer 3 routing", "Layer 1 cabling", "Layer 2 MAC addresses"]
+        answer: 0
+        explain: L3 works (ping), so look higher. Is the service listening (`ss -tlnp`)? Does it answer HTTP?
+      - kind: order
+        prompt: Put the TCP 3-way handshake in order.
+        items: ["Client sends SYN", "Server replies SYN-ACK", "Client sends ACK"]
+        explain: Each new TCP connection costs a round trip, which is one reason HTTP/2 multiplexes requests over one connection.
+      - kind: single
+        prompt: Which transport does DNS mostly use?
+        options: [UDP, TCP, ICMP, QUIC]
+        answer: 0
+        explain: DNS, video streaming and gaming favour UDP's low overhead (DNS falls back to TCP for large responses).
+      - kind: text
+        prompt: What is PostgreSQL's default port?
+        accept: ["5432"]
+      - kind: single
+        prompt: A security group opens port **6379**. Which service is that?
+        options: [Redis, Kafka, etcd, MySQL]
+        answer: 0
+        explain: "Also good to know: 9092 Kafka, 2379 etcd, 3306 MySQL, 10250 kubelet."
+
+  - id: net-dns
+    title: DNS
+    type: quiz
+    prompt: Resolution, record types, TTLs and the DNS gotchas you'll meet in production.
+    xp: 30
+    questions:
+      - kind: order
+        prompt: Put DNS resolution for `www.example.com` in order.
+        items:
+          - "Check the local cache (browser, OS)"
+          - "Ask the recursive resolver (e.g. 8.8.8.8)"
+          - "The resolver asks a root nameserver"
+          - "The resolver asks the .com TLD nameserver"
+          - "The resolver asks example.com's authoritative nameserver"
+          - "The resolver caches the answer and returns it"
+      - kind: single
+        prompt: Which record maps a name to an **IPv6** address?
+        options: [AAAA, A, CNAME, PTR]
+        answer: 0
+      - kind: single
+        prompt: You want the **root domain** `example.com` to point at your AWS load balancer. What do you use?
+        options:
+          - "An ALIAS (Route53) or A record, because a CNAME isn't allowed at the zone apex"
+          - "A CNAME record"
+          - "An MX record"
+          - "A TXT record"
+        answer: 0
+        explain: CNAMEs can't live at the root of a zone. Route53 ALIAS records solve this, and they're free.
+      - kind: single
+        prompt: You're about to move `api.example.com` to a new IP. What should you do first?
+        options:
+          - "Lower the TTL to ~60s a few days before the change, then raise it again afterwards"
+          - "Raise the TTL to a day so caches stay warm"
+          - "Delete the record, then create it again"
+          - "Nothing; DNS changes are instant"
+        answer: 0
+        explain: Caches keep old answers for the TTL. Lower it in advance so the switch propagates quickly.
+      - kind: text
+        prompt: What is the full cluster DNS name of Service **api** in namespace **production**?
+        accept: ["api.production.svc.cluster.local", "api.production.svc.cluster.local."]
+        explain: "`<service>.<namespace>.svc.cluster.local`, resolved by CoreDNS in kube-system. Inside the same namespace, `api` is enough."
+      - kind: single
+        prompt: "`api.example.com` resolves to a private IP inside the VPC but to a public IP from the internet. This is called…"
+        options: ["Split-horizon DNS", "DNS round robin", "A CNAME chain", "Reverse DNS"]
+        answer: 0
+        explain: In AWS this is a Route53 private hosted zone plus a public hosted zone.
+      - kind: single
+        prompt: Why is DNS round robin a poor load balancer?
+        options:
+          - "Clients cache answers and DNS doesn't health-check the targets"
+          - "DNS can only return one A record"
+          - "It only works for IPv6"
+          - "Round robin requires TCP"
+        answer: 0
+      - kind: single
+        prompt: Which record type powers a **reverse** lookup (IP → name, `dig -x`)?
+        options: [PTR, SOA, SRV, NS]
+        answer: 0
+
+  - id: net-lb
+    title: Load balancing
+    type: quiz
+    prompt: L4 vs L7, algorithms, health checks and TLS termination.
+    xp: 25
+    questions:
+      - kind: single
+        prompt: You need `/api/*` and `/static/*` on different backends plus TLS termination. Which AWS load balancer?
+        options: ["ALB (layer 7)", "NLB (layer 4)", "Gateway Load Balancer", "Classic Load Balancer"]
+        answer: 0
+      - kind: single
+        prompt: Non-HTTP TCP traffic that needs a **static IP** and ultra-low latency. Which AWS load balancer?
+        options: ["NLB", "ALB", "CloudFront", "Classic Load Balancer"]
+        answer: 0
+      - kind: single
+        prompt: Backends hold long-lived WebSocket connections. Which algorithm spreads load best?
+        options: ["Least connections", "Round robin", "IP hash", "Random"]
+        answer: 0
+      - kind: single
+        prompt: Your backend servers have **different capacities**. Which algorithm fits?
+        options: ["Weighted round robin", "Round robin", "Least connections", "IP hash"]
+        answer: 0
+      - kind: single
+        prompt: Users lose their session when the LB sends them to another server. What's the better long-term fix?
+        options:
+          - "Make the service stateless and keep sessions in an external store (e.g. Redis)"
+          - "Enable sticky sessions everywhere"
+          - "Use only one backend server"
+          - "Switch to DNS round robin"
+        answer: 0
+        explain: Sticky sessions work but defeat load balancing when one user does heavy work. External session state is the scalable answer.
+      - kind: multi
+        prompt: Which settings define a load balancer **health check**?
+        options: ["Interval", "Failure threshold", "Timeout", "Cache-Control", "DNS TTL"]
+        answers: [0, 1, 2]
+        explain: e.g. check `/health` every 10s, 5s timeout, mark unhealthy after 3 failures.
+      - kind: single
+        prompt: What does **TLS termination** at the load balancer mean?
+        options:
+          - "The LB decrypts HTTPS and forwards plain HTTP to the backends"
+          - "The LB forwards encrypted traffic untouched to the backends"
+          - "The LB rejects HTTP traffic"
+          - "Both client and server present certificates"
+        answer: 0
+        explain: Backends don't need certificates. The alternative is TLS passthrough (needed for end-to-end encryption or mTLS).
+
+  - id: net-http
+    title: HTTP and TLS
+    type: quiz
+    prompt: Status codes you'll see in alerts, HTTP versions, TLS and certificates.
+    xp: 25
+    questions:
+      - kind: single
+        prompt: The load balancer **can't reach** the backend (pod crashed, wrong port). Which status do clients get?
+        options: ["502 Bad Gateway", "503 Service Unavailable", "504 Gateway Timeout", "500 Internal Server Error"]
+        answer: 0
+      - kind: single
+        prompt: The backend is reachable but **too slow**, and the LB's timeout fires. Which status?
+        options: ["504 Gateway Timeout", "502 Bad Gateway", "429 Too Many Requests", "408 Request Timeout"]
+        answer: 0
+      - kind: single
+        prompt: The backend exists but is **overloaded or unhealthy**. Which status?
+        options: ["503 Service Unavailable", "502 Bad Gateway", "500 Internal Server Error", "404 Not Found"]
+        answer: 0
+      - kind: single
+        prompt: What does **429** mean?
+        options: ["Too Many Requests (rate limited)", "Unauthorized", "Not Modified", "Conflict"]
+        answer: 0
+      - kind: single
+        prompt: What does HTTP/3 run on?
+        options: ["QUIC, which is built on UDP", "TCP with TLS 1.2", "SCTP", "Raw IP"]
+        answer: 0
+        explain: QUIC avoids TCP's head-of-line blocking and sets up connections faster.
+      - kind: single
+        prompt: What is HTTP/2's headline improvement over HTTP/1.1?
+        options:
+          - "Multiplexing many requests over one TCP connection"
+          - "Running over UDP"
+          - "Removing headers entirely"
+          - "One TCP connection per request"
+        answer: 0
+      - kind: number
+        prompt: How many **round trips** does a TLS 1.3 handshake take?
+        answer: 1
+        explain: TLS 1.2 needed 2.
+      - kind: single
+        prompt: What is **mTLS**?
+        options:
+          - "Both client and server present and verify certificates"
+          - "TLS with a longer key"
+          - "TLS terminated at the load balancer"
+          - "Multiple certificates on one server"
+        answer: 0
+        explain: Used for service-to-service authentication in meshes (Istio, Linkerd), the basis of zero trust inside the cluster.
+      - kind: single
+        prompt: What does **cert-manager** do in Kubernetes?
+        options:
+          - "Issues and renews TLS certificates (e.g. from Let's Encrypt) and stores them in Secrets"
+          - "Encrypts etcd"
+          - "Scans images for CVEs"
+          - "Manages SSH keys for nodes"
+        answer: 0
+
+  - id: net-edge
+    title: Service mesh and CDN
+    type: quiz
+    prompt: When a mesh is worth it, and how caching at the edge really works.
+    xp: 25
+    questions:
+      - kind: single
+        prompt: How does a service mesh add mTLS and tracing **without code changes**?
+        options:
+          - "A sidecar proxy (e.g. Envoy) in each pod intercepts all traffic"
+          - "It patches the application's HTTP library"
+          - "It replaces kube-proxy"
+          - "It runs inside the container runtime"
+        answer: 0
+      - kind: single
+        prompt: What do your notes recommend about adopting a service mesh?
+        options:
+          - "Start without one; add it when a concrete need appears (mTLS for compliance, tracing at scale)"
+          - "Always install one on day one for future-proofing"
+          - "Never use one in production"
+          - "Only use one with fewer than 5 services"
+        answer: 0
+      - kind: single
+        prompt: Which mesh uses a lightweight Rust proxy and focuses on simplicity?
+        options: [Linkerd, Istio, Consul Connect, Envoy Gateway]
+        answer: 0
+      - kind: single
+        prompt: "What does `Cache-Control: private, max-age=3600` mean?"
+        options:
+          - "The browser may cache it for an hour, but CDNs must not"
+          - "CDNs may cache it for an hour, but browsers must not"
+          - "Nobody may cache it"
+          - "Cache forever"
+        answer: 0
+      - kind: single
+        prompt: "`no-cache` vs `no-store`: what does **no-cache** mean?"
+        options:
+          - "It may be stored, but must be revalidated with the origin before each use"
+          - "It must never be stored anywhere"
+          - "Only CDNs may store it"
+          - "Cache for a year"
+        answer: 0
+        explain: "`no-store` is the one that forbids caching."
+      - kind: single
+        prompt: Why do Vite and Webpack put content hashes in file names (`app.abc123.js`)?
+        options:
+          - "Cache busting: each build gets a new URL, so the files can be cached for a year"
+          - "To make files smaller"
+          - "For security against XSS"
+          - "So CDNs can compress them"
+        answer: 0
+      - kind: single
+        prompt: Which of these should **not** be cached on a CDN?
+        options: ["/api/user/me (user-specific)", "app.3f9a1c.js", "Product images", "Font files"]
+        answer: 0
+      - kind: single
+        prompt: In CloudFront, a rule for a URL path pattern (e.g. `/api/*` → don't cache) is called a…
+        options: [Behavior, Origin, Distribution, Origin Shield]
+        answer: 0

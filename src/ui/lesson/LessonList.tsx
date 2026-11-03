@@ -8,7 +8,7 @@ interface Props {
   onSelect: (lessonId: string, mission: number) => void;
 }
 
-const TYPE_ICON = { guided: '◆', free: '◇', boss: '☠' } as const;
+const TYPE_ICON = { guided: '◆', free: '◇', boss: '☠', quiz: '?' } as const;
 
 /** Sidebar listing every lesson and its missions, with completion and locks. */
 export function LessonList({ lessons, current, onSelect }: Props) {

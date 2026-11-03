@@ -1,0 +1,199 @@
+id: foundations
+title: Core concepts & culture
+branch: foundations
+prerequisites: []
+sources: [00-Foundations/01-Core-Concepts, 00-Foundations/02-DevOps-Culture, 00-Foundations/03-System-Design-Basics]
+theory: |
+  The vocabulary every DevOps / platform interview assumes:
+
+  - **Scalability** = *can* handle more load by adding resources (vertical = bigger machine, horizontal = more machines).
+    **Elasticity** = scales *automatically*, up **and** down.
+  - **Availability** = % of time it responds. **Reliability** = available **and** correct.
+    **Fault tolerance** = keeps working while parts fail. **Durability** = written data isn't lost.
+  - **Latency** (time per request) vs **throughput** (requests per second): batching trades one for the other.
+  - **Idempotency**: running it twice = running it once. Anything that may be retried should be idempotent.
+
+  | Availability | Downtime / year | Downtime / month |
+  |---|---|---|
+  | 99.9% | 8.7 hours | 43.8 min |
+  | 99.99% | 52 min | 4.4 min |
+  | 99.999% | 5.2 min | 26 sec |
+
+  Culture: **CALMS** (Culture, Automation, Lean, Measurement, Sharing), **DORA metrics**, **toil**, **shift left**.
+  Design basics: **CAP** (really CP vs AP), **ACID vs BASE**, stateless services, start with a modular monolith.
+missions:
+  - id: core-concepts
+    title: The -ilities
+    type: quiz
+    prompt: Scalability, elasticity, availability, reliability, fault tolerance and friends, as defined in your notes.
+    xp: 25
+    questions:
+      - kind: single
+        prompt: Your service can handle more load when you add servers, but someone has to add them by hand. Which is true?
+        options:
+          - "It is scalable but not elastic"
+          - "It is elastic but not scalable"
+          - "It is highly available but not durable"
+          - "It is fault tolerant but not scalable"
+        answer: 0
+        explain: Elasticity is *automatic* scalability, scaling up **and** back down without manual intervention (HPA, Auto Scaling Groups).
+      - kind: number
+        prompt: A **99.9%** availability target allows roughly how many **hours** of downtime per year?
+        answer: 8.76
+        tolerance: 0.3
+        unit: hours
+        explain: 0.1% of 8,760 hours is 8.76 hours, the "three nines" row of the table.
+      - kind: single
+        prompt: How much downtime per year does **five nines** (99.999%) allow?
+        options: ["About 5 minutes", "About 52 minutes", "About 8.7 hours", "About 26 seconds"]
+        answer: 0
+        explain: 5.2 minutes a year (26 seconds a month). Every extra nine costs a lot more, so pick the target the business actually needs.
+      - kind: single
+        prompt: A pricing API answers every request, but 2% of the answers contain wrong prices. It is…
+        options:
+          - "Available, but not reliable"
+          - "Reliable, but not available"
+          - "Durable, but not available"
+          - "Fault tolerant, so it's fine"
+        answer: 0
+        explain: Reliability = availability **plus** correctness. Responding is not enough if the results are wrong.
+      - kind: multi
+        prompt: Which of these are **fault-tolerance** strategies?
+        options: ["Redundancy", "Failover", "Graceful degradation", "Circuit breaker", "Vertical scaling", "Sticky sessions"]
+        answers: [0, 1, 2, 3]
+        explain: Redundancy, failover, graceful degradation, bulkheads and circuit breakers all keep the system working while parts fail. Vertical scaling and sticky sessions don't.
+      - kind: single
+        prompt: Why should any step that CI/CD might **retry** be idempotent?
+        options:
+          - "Running it twice must give the same result as running it once"
+          - "Idempotent steps run faster"
+          - "Idempotent steps never need tests"
+          - "Idempotent steps can't fail"
+        answer: 0
+        explain: Retries happen (timeouts, flaky networks). `terraform apply` converging to the desired state is the classic example.
+      - kind: single
+        prompt: Batching requests together usually…
+        options:
+          - "increases throughput and increases latency"
+          - "decreases throughput and decreases latency"
+          - "increases latency only for the first request"
+          - "has no effect on either"
+        answer: 0
+        explain: Batching gets more work done per second but each request waits longer. Ask what the system optimizes for.
+      - kind: text
+        prompt: AWS S3 claims "eleven nines" (99.999999999%) of which property?
+        accept: [durability, "/^durab/"]
+        explain: Durability (data, once written, isn't lost) is achieved through replication across disks and AZs, write-ahead logs and checksums.
+
+  - id: devops-culture
+    title: DevOps culture
+    type: quiz
+    prompt: CALMS, DORA, toil and the DevOps / SRE / platform engineering triangle.
+    xp: 25
+    questions:
+      - kind: order
+        prompt: Put the five pillars of **CALMS** in order.
+        items: [Culture, Automation, Lean, Measurement, Sharing]
+        explain: Culture (shared responsibility, blameless postmortems), Automation, Lean (small batches), Measurement (DORA, SLOs), Sharing.
+      - kind: multi
+        prompt: Which are the four **DORA** metrics?
+        options:
+          - "Deployment frequency"
+          - "Lead time for changes"
+          - "Change failure rate"
+          - "Time to restore service"
+          - "Code coverage"
+          - "Incidents per engineer"
+        answers: [0, 1, 2, 3]
+        explain: Two measure speed (deployment frequency, lead time) and two measure stability (change failure rate, time to restore).
+      - kind: single
+        prompt: What is the **elite** target for *lead time for changes* (commit → production)?
+        options: ["Less than 1 hour", "Less than 1 day", "Less than 1 week", "Less than 1 month"]
+        answer: 0
+        explain: If lead time is high, the bottleneck is usually review, testing or approval gates, not writing code.
+      - kind: single
+        prompt: Which of these is **toil**?
+        options:
+          - "Manually restarting pods every time they get OOM-killed"
+          - "Designing a new autoscaling policy"
+          - "Writing a blameless postmortem"
+          - "Building a CI pipeline"
+        answer: 0
+        explain: Toil is manual, repetitive, automatable, tactical, reactive, and it grows with the service. The others create lasting value.
+      - kind: number
+        prompt: SRE guidance says to keep toil below what **percentage** of an engineer's time?
+        answer: 50
+        unit: "%"
+        explain: The rest should be engineering work that removes future toil.
+      - kind: single
+        prompt: "\"Shift left\" means…"
+        options:
+          - "Moving quality and security checks earlier in the lifecycle (e.g. scanning in CI)"
+          - "Moving operations work to the development team only"
+          - "Deploying to the left-most availability zone first"
+          - "Reducing the number of environments"
+        answer: 0
+        explain: Security scanning in CI, load tests in the pipeline, lint and unit tests on every commit.
+      - kind: single
+        prompt: Who are the **customers** of a platform engineering team?
+        options: ["Other developers", "End users of the product", "The finance team", "External auditors"]
+        answer: 0
+        explain: Platform engineering productizes DevOps. It builds the self-service "paved road" (the IDP) that every product team uses.
+
+  - id: design-basics
+    title: System design basics
+    type: quiz
+    prompt: CAP, ACID vs BASE, latency numbers and architecture choices.
+    xp: 30
+    questions:
+      - kind: single
+        prompt: During a network partition, how should a **bank balance** service behave?
+        options:
+          - "CP: return an error rather than possibly stale data"
+          - "AP: return the latest value it has, even if stale"
+          - "CA: partitions can simply be avoided"
+          - "It doesn't matter; CAP is only theoretical"
+        answer: 0
+        explain: Partitions will happen, so the real choice is CP vs AP. Stale reads are fine for a shopping cart (AP), not for a balance (CP).
+      - kind: single
+        prompt: Cassandra and DynamoDB (in eventually consistent mode) are examples of…
+        options: ["AP systems", "CP systems", "CA systems", "ACID databases"]
+        answer: 0
+        explain: They stay available during partitions and become consistent eventually (BASE).
+      - kind: order
+        prompt: Order these from **fastest to slowest**.
+        items:
+          - "L1 cache reference"
+          - "Main memory reference"
+          - "Read 4 KB from SSD"
+          - "Round trip within the same datacenter"
+          - "Read 1 MB from disk"
+          - "Packet California → Netherlands → California"
+        explain: 0.5 ns, 100 ns, 150 µs, 0.5 ms, 20 ms, 150 ms. Memory is ~200x faster than SSD, and cross-continent is ~300x a datacenter round trip.
+      - kind: single
+        prompt: Which ACID property guarantees a transaction is **all-or-nothing**?
+        options: [Atomicity, Consistency, Isolation, Durability]
+        answer: 0
+      - kind: single
+        prompt: Why design services to be **stateless**?
+        options:
+          - "Any instance can serve any request, which unlocks horizontal scaling"
+          - "Stateless services don't need a database"
+          - "They never need health checks"
+          - "They can only be scaled vertically"
+        answer: 0
+        explain: Externalize state to Redis, databases or object storage, then add instances behind a load balancer.
+      - kind: single
+        prompt: A small team starts a new product with a simple domain. What architecture do your notes recommend?
+        options: ["A modular monolith", "Microservices from day one", "One service per developer", "A function per endpoint"]
+        answer: 0
+        explain: Split into services when there's a clear boundary **and** an organizational reason (different teams or scaling needs).
+      - kind: multi
+        prompt: Good reasons to choose **asynchronous** communication (queues/events)?
+        options:
+          - "Decoupling producers from consumers"
+          - "Long-running tasks"
+          - "Fan-out to many consumers"
+          - "The caller needs the result immediately"
+        answers: [0, 1, 2]
+        explain: Async scales better and isolates failures, at the cost of ordering, deduplication and dead-letter handling.

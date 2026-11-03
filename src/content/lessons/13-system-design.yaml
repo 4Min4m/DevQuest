@@ -1,0 +1,211 @@
+id: system-design
+title: System design interviews
+branch: system-design
+prerequisites: []
+sources:
+  - 12-System-Design/01-Design-Framework
+  - 12-System-Design/02-Scalability-Patterns
+  - 12-System-Design/03-Reliability-Patterns
+  - 12-System-Design/04-Platform-Engineering
+theory: |
+  Use the same five steps every time: **clarify → estimate → high-level design → deep dive → bottlenecks & trade-offs**.
+
+  - Estimate: 1M users × 10 requests/day ≈ **115 RPS** average, ~5× at peak.
+  - Scale reads with **caching** and **read replicas**, writes with **sharding** and **async** work; move
+    static content to a **CDN**; watch **connection counts** (PgBouncer).
+  - Survive failures with **timeouts**, **retries with backoff + jitter**, **circuit breakers**, **bulkheads**,
+    **rate limiting**, **idempotency keys** and **graceful degradation**.
+  - Platform engineering: **golden paths**, a developer portal (Backstage), multi-tenant Kubernetes
+    (namespaces, RBAC, NetworkPolicy, ResourceQuota, LimitRange).
+missions:
+  - id: design-framework
+    title: The framework and estimation
+    type: quiz
+    prompt: Structure, back-of-envelope math and what impresses an interviewer.
+    xp: 30
+    questions:
+      - kind: order
+        prompt: Put the system design framework in order.
+        items:
+          - "Clarify requirements"
+          - "Estimate scale"
+          - "High-level design"
+          - "Deep dive into key components"
+          - "Address bottlenecks and trade-offs"
+      - kind: number
+        prompt: 1 million users each make 10 requests per day. What's the **average RPS**? (rounded)
+        answer: 115
+        tolerance: 2
+        unit: RPS
+        explain: 10M requests / 86,400 seconds ≈ 115 RPS.
+      - kind: number
+        prompt: Assuming peak is **5×** the average of 115 RPS, how many RPS do you design for?
+        answer: 575
+        tolerance: 10
+        unit: RPS
+      - kind: multi
+        prompt: Which of these are **non-functional** requirements?
+        options:
+          - "Latency target (e.g. < 100 ms)"
+          - "Availability target"
+          - "Read/write ratio and number of users"
+          - "Strong or eventual consistency"
+          - "The core user actions (upload, search...)"
+        answers: [0, 1, 2, 3]
+        explain: Core user actions are *functional* requirements (what the system does).
+      - kind: single
+        prompt: Which architecture do your notes give for a **centralized logging system**?
+        options:
+          - "Agents (Fluentd/Vector) → Kafka buffer → Elasticsearch/S3 → Kibana/Grafana"
+          - "Apps write directly to a shared NFS folder"
+          - "Every service exposes its logs over HTTP"
+          - "Logs are emailed to the on-call engineer"
+        answer: 0
+        explain: Kafka absorbs bursts so the storage tier can ingest at its own pace.
+      - kind: single
+        prompt: Which sentence best shows the trade-off thinking interviewers look for?
+        options:
+          - "\"Kafka would give us durability, but it adds operational complexity. Is that worth it at this scale?\""
+          - "\"We'll use Kafka because it's industry standard.\""
+          - "\"Microservices, obviously.\""
+          - "\"I'd use whatever is newest.\""
+        answer: 0
+
+  - id: scalability
+    title: Scalability patterns
+    type: quiz
+    prompt: Replicas, shards, queues, fan-out and the 10× checklist.
+    xp: 25
+    questions:
+      - kind: single
+        prompt: A read-heavy app is maxing out the database CPU on SELECTs. First move?
+        options: ["Add caching and read replicas", "Shard the database by user_id", "Switch to NoSQL", "Scale the app servers"]
+        answer: 0
+      - kind: single
+        prompt: What is the main trade-off of read replicas?
+        options: ["Replication lag, so reads may be slightly stale", "Writes become impossible", "They double the write throughput", "Joins stop working"]
+        answer: 0
+      - kind: single
+        prompt: What becomes hard once data is **sharded**?
+        options: ["Cross-shard queries and joins", "Single-row lookups by shard key", "Adding indexes", "Backups"]
+        answer: 0
+      - kind: single
+        prompt: Users upload videos that take minutes to transcode. How do you keep the API fast?
+        options:
+          - "Return immediately, push a message to a queue and let workers process it asynchronously"
+          - "Increase the API timeout to 10 minutes"
+          - "Transcode on the client"
+          - "Add read replicas"
+        answer: 0
+      - kind: single
+        prompt: How does Twitter deliver tweets from celebrities with millions of followers?
+        options: ["Fan-out on read", "Fan-out on write", "A bigger database", "Email"]
+        answer: 0
+        explain: Writing to millions of feeds on every tweet doesn't scale, so followers pull those tweets at read time.
+      - kind: order
+        prompt: Order the "scale this 10×" checklist from your notes.
+        items:
+          - "Can the app tier scale horizontally (stateless)?"
+          - "Read load → add caching / read replicas"
+          - "Write load → consider sharding / async processing"
+          - "What's synchronous that could be queued?"
+          - "What static content could go to a CDN?"
+          - "What's the new single point of failure?"
+
+  - id: reliability-patterns
+    title: Reliability patterns
+    type: quiz
+    prompt: Keep one slow dependency from taking down everything.
+    xp: 30
+    questions:
+      - kind: single
+        prompt: A circuit breaker is **OPEN**. What happens after its timeout?
+        options:
+          - "It goes HALF-OPEN and lets a test request through"
+          - "It closes and sends all traffic again"
+          - "It stays open forever"
+          - "It restarts the downstream service"
+        answer: 0
+        explain: A successful test closes it again; a failed test re-opens it.
+      - kind: single
+        prompt: Why add **jitter** to exponential backoff?
+        options:
+          - "So clients don't all retry at the same instant (thundering herd)"
+          - "To make retries faster"
+          - "To avoid TLS errors"
+          - "Jitter decides how many retries to make"
+        answer: 0
+      - kind: multi
+        prompt: When should you **not** retry automatically?
+        options:
+          - "On 4xx client errors"
+          - "On non-idempotent operations without an idempotency key"
+          - "On a 503 from an idempotent GET"
+          - "On a timeout of an idempotent GET"
+        answers: [0, 1]
+      - kind: single
+        prompt: "The API gateway has a 10s timeout and calls A → B → database. What is a sensible timeout for B?"
+        options: ["2 seconds", "15 seconds", "No timeout", "10 seconds, the same as the gateway"]
+        answer: 0
+        explain: Each hop's timeout should be shorter than its caller's (10s → 5s → 2s → 1s).
+      - kind: single
+        prompt: You give each dependency its own thread pool so a slow payment service can't starve orders. Which pattern?
+        options: [Bulkhead, "Circuit breaker", "Rate limiting", "Retry"]
+        answer: 0
+      - kind: single
+        prompt: Which rate-limiting algorithm **allows bursts**?
+        options: ["Token bucket", "Leaky bucket", "Fixed window", "Sliding window"]
+        answer: 0
+      - kind: single
+        prompt: A **readiness** probe starts failing. What does Kubernetes do?
+        options:
+          - "Removes the pod from Service endpoints, without restarting it"
+          - "Restarts the container"
+          - "Deletes the Deployment"
+          - "Nothing"
+        answer: 0
+        explain: A liveness failure restarts the container; a readiness failure only takes it out of rotation.
+      - kind: single
+        prompt: A client retries `POST /payments` after a timeout. How do you avoid charging twice?
+        options: ["An idempotency key", "A longer timeout", "A circuit breaker", "Sticky sessions"]
+        answer: 0
+
+  - id: platform-engineering
+    title: Platform engineering
+    type: quiz
+    prompt: Golden paths, developer portals and safe multi-tenant clusters.
+    xp: 20
+    questions:
+      - kind: single
+        prompt: What is a **golden path**?
+        options:
+          - "An opinionated, supported default way to do something; the path of least resistance, not mandatory"
+          - "A mandatory deployment process"
+          - "The fastest network route between regions"
+          - "A Git branching model"
+        answer: 0
+      - kind: single
+        prompt: What is Backstage?
+        options:
+          - "A developer portal: service catalog, software templates, TechDocs"
+          - "A Kubernetes scheduler"
+          - "A CI runner"
+          - "A secrets manager"
+        answer: 0
+      - kind: multi
+        prompt: Which controls make a shared Kubernetes cluster safe for multiple teams?
+        options: [Namespaces, RBAC, NetworkPolicy, ResourceQuota, LimitRange, "HorizontalPodAutoscaler"]
+        answers: [0, 1, 2, 3, 4]
+      - kind: single
+        prompt: Which object caps total CPU and memory **per namespace**?
+        options: [ResourceQuota, LimitRange, PodDisruptionBudget, PriorityClass]
+        answer: 0
+        explain: LimitRange sets per-container defaults and maximums; ResourceQuota caps the namespace total.
+      - kind: single
+        prompt: What is platform engineering's main goal?
+        options:
+          - "Reduce developers' cognitive load with self-service infrastructure"
+          - "Replace developers with automation"
+          - "Own every team's on-call"
+          - "Centralize all deployments behind manual approval"
+        answer: 0

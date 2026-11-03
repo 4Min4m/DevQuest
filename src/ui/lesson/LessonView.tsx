@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useReducer, useRef, useState } from 'react';
 import { lessons } from '../../content';
 import { heartsLeft, isLessonComplete, isMissionDone, isMissionUnlocked, levelInfo, MAX_HEARTS } from '../../game/progress';
+import { QuizSession } from '../../game/quiz';
 import { MissionSession, SessionEvent } from '../../game/session';
 import type { MissionReward, ReviewReward } from '../../game/store';
 import type { Lesson } from '../../game/types';
@@ -11,6 +12,7 @@ import { actions, progressStore, useProgress } from '../state';
 import { TerminalPane } from '../terminal/TerminalPane';
 import { LessonList } from './LessonList';
 import { MissionPane, RewardView } from './MissionPane';
+import { QuizRunner } from './QuizRunner';
 
 /** Strip markdown backticks for plain terminal output. */
 const plain = (s: string) => s.replace(/`/g, '');
@@ -91,12 +93,13 @@ function MissionScreen({ lesson, missionIndex, mode }: { lesson: Lesson; mission
   const [, rerender] = useReducer((x: number) => x + 1, 0);
   const lastEvents = useRef<SessionEvent[]>([]);
 
-  // A fresh machine for every attempt. Entering with no hearts left starts in the failed state.
+  const isQuiz = mission.type === 'quiz';
+  // A fresh machine (or question set) for every attempt. Entering with no hearts left starts failed.
   const session = useMemo(() => {
-    const s = new MissionSession(mission);
+    const s = isQuiz ? new QuizSession(mission, attempt + 1 + (review ? 7 : 0)) : new MissionSession(mission);
     if (!review && heartsLeft(progressStore.getState().progress, lesson.id) === 0) s.fail();
     return s;
-  }, [mission, lesson.id, attempt, review]);
+  }, [mission, lesson.id, attempt, review, isQuiz]);
 
   const restart = useCallback(() => {
     setAttempt((a) => a + 1);
@@ -149,7 +152,7 @@ function MissionScreen({ lesson, missionIndex, mode }: { lesson: Lesson; mission
 
   const execute = useCallback(
     (line: string): RunResult => {
-      const { result, events } = session.run(line);
+      const { result, events } = (session as MissionSession).run(line);
       handleEvents(events);
       return result;
     },
@@ -190,6 +193,7 @@ function MissionScreen({ lesson, missionIndex, mode }: { lesson: Lesson; mission
         feedback={feedback}
         mistakes={mistakes}
         onCheck={() => {
+          if (session instanceof QuizSession) return;
           const v = session.check();
           if (v.passed) onPassed();
           else {
@@ -214,19 +218,36 @@ function MissionScreen({ lesson, missionIndex, mode }: { lesson: Lesson; mission
         onNext={next ? () => navigate({ view: 'lesson', ...next }) : () => navigate({ view: 'tree' })}
         nextLabel={next ? 'Next mission →' : review ? "Back to today's plan" : 'Lesson complete — back to the skill tree'}
       />
-      <main className="terminal-area">
-        <TerminalPane
-          key={`${mission.id}-${attempt}`}
-          shell={session.shell}
-          banner={banner}
-          execute={execute}
-          onCommand={onCommand}
-          onFileSaved={() => {
-            handleEvents(session.reevaluate());
-            return onCommand();
-          }}
-        />
-      </main>
+      {session instanceof QuizSession ? (
+        <main className="quiz-area">
+          <QuizRunner
+            key={`${mission.id}-${attempt}`}
+            session={session}
+            onAnswered={(correct) => {
+              if (!correct) penalize();
+              rerender();
+            }}
+            onPassed={() => {
+              onPassed();
+              rerender();
+            }}
+          />
+        </main>
+      ) : (
+        <main className="terminal-area">
+          <TerminalPane
+            key={`${mission.id}-${attempt}`}
+            shell={session.shell}
+            banner={banner}
+            execute={execute}
+            onCommand={onCommand}
+            onFileSaved={() => {
+              handleEvents(session.reevaluate());
+              return onCommand();
+            }}
+          />
+        </main>
+      )}
     </div>
   );
 }

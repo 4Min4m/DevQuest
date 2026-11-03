@@ -18,6 +18,19 @@ browser terminal. No backend, no runtime network calls. See [CLAUDE.md](CLAUDE.m
   Docker validators, and 8 Docker missions + 3 boss fights (CrashLoop, port conflict, broken nginx config).
 - **Step 6 done:** 16 badges, daily mission, spaced-review recall challenges, timed Interview Mode,
   CI and GitHub Pages deployment.
+- **Step 7 done:** knowledge checks (quiz missions) and the **Theory & interviews** track, built from
+  the knowledge vault: Foundations, Networking, Storage & Databases, System Design, SRE (22 checks).
+
+### Roadmap (from the knowledge vault)
+
+| Step | Chapters | What gets built |
+|---|---|---|
+| 8 | 03 Linux (rest), 02 Networking tools | `systemctl`/`journalctl`, `ss`, `lsof`, `ulimit`, `top`/`free`/`uptime`/`df -i`, `dig`/`ping`/`traceroute`, `curl -v` + boss fights |
+| 9 | 01 Version Control | Git simulator (commit, branch, merge, rebase, stash, cherry-pick, remotes) + missions |
+| 10–11 | 05 Kubernetes | `kubectl` simulator: workloads, services, config, probes, scheduling, HPA, storage, RBAC, Helm |
+| 12 | 06 CI/CD, GitOps | Pipeline runner (GitHub Actions / GitLab CI), deployment strategies, ArgoCD-style sync |
+| 13 | 07 Cloud, 08 IaC | Terraform, Ansible, mock AWS |
+| 14 | 09 Observability, 10 Security | PromQL, logs, alerting, DevSecOps + incident boss fights |
 
 ## Develop
 
@@ -98,6 +111,23 @@ and from any sub-path.
   +30 for solving all in time.
 - **Badges:** 16, from *First steps* and *CrashLoop fixer* to *Boss slayer*, *Flawless* (a lesson
   without losing a heart) and *Hired!* (pass an interview). See them on the Profile page.
+
+## Knowledge checks
+
+Theory chapters use `type: quiz` missions answered in the lesson pane instead of the terminal.
+Wrong answers cost a heart and the question comes back at the end; the mission passes when every
+question is answered correctly. Question kinds:
+
+```yaml
+- kind: single      # options + answer (index)
+- kind: multi       # options + answers (indices)
+- kind: number      # answer, optional tolerance and unit ("1,000" and "43.2 min" are accepted)
+- kind: order       # items listed in the correct order; the UI shuffles them
+- kind: text        # accept: exact strings (case-insensitive) or /regex/
+```
+
+Lessons can list `sources:` (notes in the knowledge vault, e.g. `02-Networking/02-DNS`), shown in the
+lesson pane. Content QA checks that every correct answer grades as correct and a wrong one doesn't.
 
 ## Writing missions
 

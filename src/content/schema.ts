@@ -2,8 +2,10 @@ import type { Check, Lesson } from '../game/types';
 import { CHECK_TYPES } from '../game/validators';
 
 const BRANCHES = [
+  'foundations', 'networking', 'storage-databases', 'system-design', 'sre',
   'linux-basics', 'files-permissions', 'processes', 'text-processing', 'docker-basics',
   'images-dockerfile', 'volumes-networks', 'compose', 'troubleshooting',
+  'version-control', 'kubernetes', 'cicd', 'cloud-iac', 'observability', 'security',
 ];
 
 /** Collects every problem in a lesson file, so authors see them all at once. */
@@ -105,10 +107,65 @@ function checkCheck(c: unknown, where: string, p: Problems): void {
   }
 }
 
+function checkQuestion(q: unknown, where: string, p: Problems): void {
+  if (!isObj(q)) return p.add(where, 'question must be an object');
+  if (!isStr(q.prompt)) p.add(where, "missing 'prompt'");
+  const opts = Array.isArray(q.options) ? q.options : null;
+  const inRange = (i: unknown) => typeof i === 'number' && Number.isInteger(i) && !!opts && i >= 0 && i < opts.length;
+  switch (q.kind) {
+    case 'single':
+      if (!opts || opts.length < 2 || !opts.every(isStr)) p.add(where, 'single needs at least 2 string options');
+      if (!inRange(q.answer)) p.add(where, "single needs 'answer' = index of the correct option");
+      break;
+    case 'multi':
+      if (!opts || opts.length < 2 || !opts.every(isStr)) p.add(where, 'multi needs at least 2 string options');
+      if (!Array.isArray(q.answers) || !q.answers.length || !q.answers.every(inRange)) p.add(where, "multi needs 'answers' = indices of the correct options");
+      else if (new Set(q.answers).size !== q.answers.length) p.add(where, 'multi answers must be unique');
+      break;
+    case 'number':
+      if (typeof q.answer !== 'number' || !Number.isFinite(q.answer)) p.add(where, "number needs a numeric 'answer'");
+      if (q.tolerance !== undefined && (typeof q.tolerance !== 'number' || q.tolerance < 0)) p.add(where, "'tolerance' must be a non-negative number");
+      break;
+    case 'order':
+      if (!Array.isArray(q.items) || q.items.length < 2 || !q.items.every(isStr)) p.add(where, 'order needs at least 2 items (in the correct order)');
+      else if (new Set(q.items).size !== q.items.length) p.add(where, 'order items must be unique');
+      break;
+    case 'text':
+      if (!Array.isArray(q.accept) || !q.accept.length || !q.accept.every(isStr)) p.add(where, "text needs 'accept' (accepted answers)");
+      else
+        for (const a of q.accept as string[]) {
+          const re = /^\/(.*)\/([a-z]*)$/.exec(a);
+          if (re) {
+            try {
+              new RegExp(re[1], re[2]);
+            } catch {
+              p.add(where, `invalid regex '${a}'`);
+            }
+          }
+        }
+      break;
+    default:
+      p.add(where, `unknown question kind '${String(q.kind)}' (single, multi, number, order, text)`);
+  }
+}
+
 function checkMission(m: unknown, where: string, p: Problems): void {
   if (!isObj(m)) return p.add(where, 'mission must be an object');
   for (const k of ['id', 'title', 'prompt']) if (!isStr(m[k])) p.add(where, `missing '${k}'`);
-  if (!['guided', 'free', 'boss'].includes(String(m.type))) p.add(where, `type must be guided, free or boss`);
+  if (!['guided', 'free', 'boss', 'quiz'].includes(String(m.type))) p.add(where, `type must be guided, free, boss or quiz`);
+  if (m.type === 'quiz') {
+    // Knowledge checks: questions instead of a machine, validator and solution.
+    if (!Array.isArray(m.questions) || !m.questions.length) p.add(where, 'quiz needs questions');
+    else m.questions.forEach((q, i) => checkQuestion(q, `${where}.questions[${i}]`, p));
+    if (typeof m.xp !== 'number' || m.xp <= 0) p.add(where, "'xp' must be a positive number");
+    for (const k of ['validator', 'solution', 'initialState']) if (k in m) p.add(where, `quiz missions don't take '${k}'`);
+    if (Array.isArray(m.hints) && m.hints.length) p.add(where, 'quiz missions must not have hints');
+    m.hints = [];
+    m.validator = { checks: [] };
+    m.solution = [];
+    if (m.par === undefined && Array.isArray(m.questions)) m.par = m.questions.length;
+    return;
+  }
   if (!Array.isArray(m.hints)) p.add(where, "missing 'hints' (use [] for none)");
   else {
     m.hints.forEach((h, i) => {
@@ -137,6 +194,7 @@ export function assertLesson(data: unknown, source: string): Lesson {
   for (const k of ['id', 'title', 'theory']) if (!isStr(data[k])) p.add(source, `missing '${k}'`);
   if (!BRANCHES.includes(String(data.branch))) p.add(source, `unknown branch '${String(data.branch)}'`);
   if (!Array.isArray(data.prerequisites)) p.add(source, "missing 'prerequisites' (use [] for none)");
+  if (data.sources !== undefined && (!Array.isArray(data.sources) || !data.sources.every(isStr))) p.add(source, "'sources' must be a list of note paths");
   if (!Array.isArray(data.missions) || !data.missions.length) p.add(source, 'lesson needs missions');
   else {
     const ids = new Set<string>();
@@ -156,8 +214,13 @@ export function assertCatalog(lessons: Lesson[]): void {
   const ids = new Set(lessons.map((l) => l.id));
   const problems: string[] = [];
   if (ids.size !== lessons.length) problems.push('duplicate lesson ids');
+  const seen = new Set<string>();
   for (const l of lessons) {
-    for (const pre of l.prerequisites) if (!ids.has(pre)) problems.push(`${l.id}: unknown prerequisite '${pre}'`);
+    for (const pre of l.prerequisites) {
+      if (!ids.has(pre)) problems.push(`${l.id}: unknown prerequisite '${pre}'`);
+      else if (!seen.has(pre)) problems.push(`${l.id}: prerequisite '${pre}' must come earlier in the course`);
+    }
+    seen.add(l.id);
   }
   if (problems.length) throw new Error('Invalid lesson catalog:\n  ' + problems.join('\n  '));
 }

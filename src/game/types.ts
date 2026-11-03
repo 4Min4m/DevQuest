@@ -5,6 +5,13 @@
 import type { HttpResponse, Process } from '../sim/state';
 
 export type BranchId =
+  // theory tracks (knowledge checks)
+  | 'foundations'
+  | 'networking'
+  | 'storage-databases'
+  | 'system-design'
+  | 'sre'
+  // hands-on tracks
   | 'linux-basics'
   | 'files-permissions'
   | 'processes'
@@ -13,7 +20,14 @@ export type BranchId =
   | 'images-dockerfile'
   | 'volumes-networks'
   | 'compose'
-  | 'troubleshooting';
+  | 'troubleshooting'
+  // planned
+  | 'version-control'
+  | 'kubernetes'
+  | 'cicd'
+  | 'cloud-iac'
+  | 'observability'
+  | 'security';
 
 export interface Lesson {
   id: string;
@@ -23,10 +37,22 @@ export interface Lesson {
   prerequisites: string[];
   /** Short markdown shown before the missions. */
   theory: string;
+  /** Notes in the learner's knowledge vault this lesson is based on (e.g. "02-Networking/02-DNS"). */
+  sources?: string[];
   missions: Mission[];
 }
 
-export type MissionType = 'guided' | 'free' | 'boss';
+/** `quiz` missions are knowledge checks answered in the lesson pane (no terminal). */
+export type MissionType = 'guided' | 'free' | 'boss' | 'quiz';
+
+export type Question =
+  | { kind: 'single'; prompt: string; options: string[]; answer: number; explain?: string }
+  | { kind: 'multi'; prompt: string; options: string[]; answers: number[]; explain?: string }
+  | { kind: 'number'; prompt: string; answer: number; tolerance?: number; unit?: string; explain?: string }
+  /** `items` are listed in the correct order; the UI shuffles them. */
+  | { kind: 'order'; prompt: string; items: string[]; explain?: string }
+  /** Accepted answers: case-insensitive exact strings, or `/regex/`. */
+  | { kind: 'text'; prompt: string; accept: string[]; explain?: string };
 
 export interface Mission {
   id: string;
@@ -45,6 +71,8 @@ export interface Mission {
   explain?: string;
   /** A reference solution, one command line per entry. Used by content QA tests. */
   solution: string[];
+  /** Knowledge-check questions (quiz missions only). */
+  questions?: Question[];
 }
 
 export interface Hint {

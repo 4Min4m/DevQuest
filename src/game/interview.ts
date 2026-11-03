@@ -10,9 +10,9 @@ export const INTERVIEW_TIME_MS = 10 * 60 * 1000;
 export const INTERVIEW_XP_PER_SOLVE = 15;
 export const INTERVIEW_PASS_BONUS = 30;
 
-/** Missions eligible for interviews: everything the learner has finished. */
+/** Missions eligible for interviews: hands-on missions the learner has finished (not knowledge checks). */
 export function interviewPool(p: ProgressState, lessons: Lesson[]): Mission[] {
-  return lessons.flatMap((l) => l.missions).filter((m) => isMissionDone(p, m.id));
+  return lessons.flatMap((l) => l.missions).filter((m) => m.type !== 'quiz' && isMissionDone(p, m.id));
 }
 
 /** Deterministic shuffle (mulberry32) so a seed always yields the same interview. */

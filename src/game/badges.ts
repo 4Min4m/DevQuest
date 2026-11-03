@@ -41,6 +41,13 @@ export const BADGES: BadgeDef[] = [
       return bosses.length > 0 && bosses.every((m) => m.id in p.missions);
     },
   },
+  {
+    id: 'theory-buff',
+    title: 'Theory buff',
+    description: 'Complete 10 knowledge checks',
+    icon: '📚',
+    earned: (p, l) => l.flatMap((x) => x.missions).filter((m) => m.type === 'quiz' && m.id in p.missions).length >= 10,
+  },
   { id: 'no-hints-10', title: 'Hint-free', description: 'Complete 10 missions without hints', icon: '🧠', earned: (p) => Object.values(p.missions).filter((m) => m.noHints).length >= 10 },
   { id: 'on-par-5', title: 'Efficient', description: 'Finish 5 missions within par', icon: '⚡', earned: (p) => Object.values(p.missions).filter((m) => m.onPar).length >= 5 },
   { id: 'streak-3', title: 'On a roll', description: 'Reach a 3-day streak', icon: '🔥', earned: (p) => p.streak.best >= 3 },

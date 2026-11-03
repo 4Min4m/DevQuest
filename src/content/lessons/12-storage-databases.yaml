@@ -1,0 +1,190 @@
+id: storage-databases
+title: Storage, databases, caches and queues
+branch: storage-databases
+prerequisites: []
+sources:
+  - 11-Storage-and-Databases/01-Storage-Types
+  - 11-Storage-and-Databases/02-Databases
+  - 11-Storage-and-Databases/03-Caching
+  - 11-Storage-and-Databases/04-Message-Queues
+theory: |
+  - **Block** (EBS): a disk for one node, the lowest latency → databases. **Object** (S3): HTTP API, cheap and
+    virtually unlimited → backups, media, Terraform state. **File** (EFS): shared by many nodes → ReadWriteMany.
+  - **SQL** for relationships, joins and ACID. **NoSQL** for specific scale or access patterns: key-value, document,
+    wide-column, graph. Your default: **Postgres**.
+  - **Replication:** sync = consistent but slower writes; async = fast, but replicas can be stale and data can be lost.
+  - **Caching:** cache-aside (most common), write-through, write-behind, read-through; LRU eviction;
+    watch out for stampedes and hot keys.
+  - **Queues vs streams:** SQS/RabbitMQ deliver each message once, then delete it; Kafka keeps a log you can replay,
+    with ordering per partition.
+missions:
+  - id: storage-types
+    title: Block, object or file?
+    type: quiz
+    prompt: Pick the right storage type, and know how Kubernetes provisions it.
+    xp: 20
+    questions:
+      - kind: single
+        prompt: Where should a PostgreSQL data directory live?
+        options: ["Block storage (e.g. EBS)", "Object storage (e.g. S3)", "File storage (e.g. EFS)", "In the container filesystem"]
+        answer: 0
+        explain: Databases need low-latency random I/O on a disk owned by one node.
+      - kind: single
+        prompt: Backups, media files and Terraform state belong in…
+        options: ["Object storage", "Block storage", "File storage", "A ConfigMap"]
+        answer: 0
+      - kind: single
+        prompt: Several pods must read and write the **same files** at once. What do you use?
+        options: ["File storage such as EFS (ReadWriteMany)", "An EBS volume (ReadWriteOnce)", "S3 mounted as a disk", "emptyDir"]
+        answer: 0
+      - kind: single
+        prompt: Which storage type is the cheapest per GB and virtually unlimited?
+        options: [Object, Block, File]
+        answer: 0
+      - kind: single
+        prompt: What is the access mode of an EBS-backed PersistentVolume?
+        options: [ReadWriteOnce, ReadWriteMany, ReadOnlyMany, ReadWriteOncePod]
+        answer: 0
+      - kind: single
+        prompt: With **dynamic provisioning**, what happens when you create a PVC?
+        options:
+          - "Its StorageClass automatically provisions a volume (e.g. a new EBS disk)"
+          - "An admin gets a ticket to create the PV"
+          - "Nothing until a node restarts"
+          - "The pod's container filesystem is used"
+        answer: 0
+
+  - id: databases
+    title: SQL, NoSQL and scaling databases
+    type: quiz
+    prompt: Choosing a database, replication, indexes, connection pooling and shard keys.
+    xp: 30
+    questions:
+      - kind: single
+        prompt: Orders, customers and products with lots of joins and strong consistency. Which database type?
+        options: ["Relational (SQL)", "Wide-column", "Key-value", "Graph"]
+        answer: 0
+      - kind: single
+        prompt: Massive write volume of IoT / time-series data, queried by partition key. Which type?
+        options: ["Wide-column (Cassandra)", "Relational (Postgres)", "Graph (Neo4j)", "Document (MongoDB)"]
+        answer: 0
+      - kind: single
+        prompt: A recommendation engine traverses "friends of friends". Which database type is built for that?
+        options: [Graph, Key-value, Wide-column, Relational]
+        answer: 0
+      - kind: single
+        prompt: What is your default database choice, according to your notes?
+        options:
+          - "Postgres, moving to NoSQL only for a specific scale or access-pattern reason"
+          - "MongoDB for everything"
+          - "DynamoDB because it scales"
+          - "Whatever the team used last time"
+        answer: 0
+        explain: Postgres handles surprising scale and JSONB gives document-like flexibility when you need it.
+      - kind: single
+        prompt: What is the trade-off of **asynchronous** replication?
+        options:
+          - "Lower write latency, but replicas can serve stale reads and data can be lost if the primary dies"
+          - "Higher write latency, but no data loss"
+          - "No trade-off at all"
+          - "It only works with NoSQL"
+        answer: 0
+      - kind: single
+        prompt: What does an index cost you?
+        options: ["Slower writes and extra storage", "Slower reads", "Nothing", "Loss of ACID guarantees"]
+        answer: 0
+        explain: Index the columns in WHERE, JOIN and ORDER BY, but don't over-index.
+      - kind: number
+        prompt: 100 app instances each open 10 database connections. How many connections hit the database?
+        answer: 1000
+        explain: Postgres caps out around 100–500, which is why you put PgBouncer (or RDS Proxy) in front.
+      - kind: single
+        prompt: Which is the better shard key for a multi-tenant SaaS?
+        options: ["tenant_id", "created_at", "country (90% of tenants are in one country)", "a random number per row"]
+        answer: 0
+        explain: Match your common query pattern and spread load evenly. Time- or skew-based keys create hot shards.
+
+  - id: caching
+    title: Caching
+    type: quiz
+    prompt: Cache strategies, eviction and the classic caching failure modes.
+    xp: 25
+    questions:
+      - kind: single
+        prompt: The app checks the cache; on a miss it reads the DB and fills the cache. Which pattern is this?
+        options: [Cache-aside, Write-through, Write-behind, Read-through]
+        answer: 0
+        explain: The most common pattern, also called lazy loading.
+      - kind: single
+        prompt: Which pattern gives the fastest writes but risks losing data if the cache dies before flushing?
+        options: [Write-behind, Write-through, Cache-aside, Read-through]
+        answer: 0
+      - kind: single
+        prompt: Which eviction policy does Redis use by default, per your notes?
+        options: ["LRU (least recently used)", "LFU", "FIFO", "Random"]
+        answer: 0
+      - kind: single
+        prompt: A popular cache entry expires and thousands of requests hit the database at once. This is a…
+        options: ["Cache stampede (thundering herd)", "Cache poisoning", "Hot key problem", "Split brain"]
+        answer: 0
+      - kind: multi
+        prompt: Which of these mitigate a cache stampede?
+        options:
+          - "A mutex, so only one request refreshes the value"
+          - "Probabilistic early expiration"
+          - "Background refresh"
+          - "Lowering the TTL"
+          - "Turning off the cache"
+        answers: [0, 1, 2]
+      - kind: single
+        prompt: You need persistence, pub/sub and sorted sets for a leaderboard. Which cache?
+        options: [Redis, Memcached]
+        answer: 0
+      - kind: single
+        prompt: A celebrity's profile key gets a huge share of all traffic. What helps?
+        options:
+          - "A local in-memory cache for the hottest keys, or replicating the key across shards"
+          - "A longer TTL on every key"
+          - "Moving to write-through"
+          - "Using Memcached"
+        answer: 0
+
+  - id: queues
+    title: Message queues and event streams
+    type: quiz
+    prompt: SQS vs Kafka, partitions, consumer groups and the settings that bite.
+    xp: 25
+    questions:
+      - kind: single
+        prompt: Several services need the **same** events, and you want to replay history. What do you use?
+        options: [Kafka, "SQS standard queue", "RabbitMQ work queue", "A cron job"]
+        answer: 0
+      - kind: single
+        prompt: A Kafka topic has 6 partitions. What is the maximum number of consumers in **one** consumer group that can work in parallel?
+        options: ["6", "Unlimited", "1", "3"]
+        answer: 0
+        explain: One partition is consumed by at most one consumer per group. Add partitions for more parallelism.
+      - kind: single
+        prompt: How do you guarantee ordering of all events for one user?
+        options:
+          - "Use user_id as the partition key, so they land in the same partition"
+          - "Use a single partition for the whole topic"
+          - "Sort the events in the consumer"
+          - "Kafka always guarantees global ordering"
+        answer: 0
+      - kind: single
+        prompt: "SQS: a job takes 60s, but the visibility timeout is 30s, so the message gets processed twice. What's the fix?"
+        options:
+          - "Set the visibility timeout above the maximum processing time"
+          - "Switch to a FIFO queue"
+          - "Add a dead-letter queue"
+          - "Lower the timeout to 10s"
+        answer: 0
+      - kind: single
+        prompt: After N failed attempts, where should a message go so you can inspect it?
+        options: ["A dead-letter queue (DLQ)", "Back to the front of the queue", "The application log", "Nowhere; delete it"]
+        answer: 0
+      - kind: single
+        prompt: What is your default for a simple task queue on AWS, per your notes?
+        options: [SQS, Kafka, RabbitMQ, Kinesis]
+        answer: 0

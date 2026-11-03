@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { BadgeDef } from '../../game/badges';
 import { MAX_HEARTS } from '../../game/progress';
+import type { QuizSession } from '../../game/quiz';
 import type { MissionSession } from '../../game/session';
 import type { Lesson } from '../../game/types';
 import type { CheckResult } from '../../game/validators';
@@ -9,7 +10,7 @@ import { Markdown } from '../Markdown';
 interface Props {
   lesson: Lesson;
   missionIndex: number;
-  session: MissionSession;
+  session: MissionSession | QuizSession;
   hearts: number;
   /** Set once the mission has been completed and scored. */
   reward: RewardView | null;
@@ -27,7 +28,7 @@ interface Props {
   nextLabel: string;
 }
 
-const TYPE_LABEL = { guided: 'Guided', free: 'Free — no hints', boss: 'Boss fight' } as const;
+const TYPE_LABEL = { guided: 'Guided', free: 'Free — no hints', boss: 'Boss fight', quiz: 'Knowledge check' } as const;
 
 export function Hearts({ count }: { count: number }) {
   return (
@@ -109,6 +110,17 @@ export function MissionPane(props: Props) {
         <h1>{lesson.title}</h1>
       </div>
 
+      {lesson.sources?.length ? (
+        <p className="sources">
+          📓 From your notes: {lesson.sources.map((src, i) => (
+            <span key={src}>
+              {i > 0 && ', '}
+              <code>{src}</code>
+            </span>
+          ))}
+        </p>
+      ) : null}
+
       <details className="theory" open={theoryOpen} onToggle={(e) => setTheoryOpen((e.target as HTMLDetailsElement).open)}>
         <summary>Theory</summary>
         <Markdown text={lesson.theory} />
@@ -125,9 +137,15 @@ export function MissionPane(props: Props) {
           )}
           <span className={`badge ${mission.type}`}>{TYPE_LABEL[mission.type]}</span>
           <span className="badge xp">{mission.xp} XP</span>
-          <span className="badge" title="Expected number of commands — meet it for a bonus">
-            par {mission.par}
-          </span>
+          {mission.type === 'quiz' ? (
+            <span className="badge" title="Answer every question right the first time for the bonus">
+              {mission.questions?.length ?? 0} questions
+            </span>
+          ) : (
+            <span className="badge" title="Expected number of commands — meet it for a bonus">
+              par {mission.par}
+            </span>
+          )}
           <Hearts count={hearts} />
         </div>
         <h2>{mission.title}</h2>
@@ -183,9 +201,12 @@ export function MissionPane(props: Props) {
             <h3>✔ Mission complete</h3>
             {reward && <RewardPanel reward={reward} />}
             <p className="stats">
-              {stats.commands} command{stats.commands === 1 ? '' : 's'} (par {stats.par}) · {stats.hintsUsed} hint
+              {mission.type === 'quiz'
+                ? `${stats.par} questions · ${stats.failedChecks} wrong answer${stats.failedChecks === 1 ? '' : 's'}`
+                : `${stats.commands} command${stats.commands === 1 ? '' : 's'} (par ${stats.par}) · `}
+              {mission.type !== 'quiz' && <>{stats.hintsUsed} hint
               {stats.hintsUsed === 1 ? '' : 's'} · {stats.failedChecks + stats.mistakes} mistake
-              {stats.failedChecks + stats.mistakes === 1 ? '' : 's'}
+              {stats.failedChecks + stats.mistakes === 1 ? '' : 's'}</>}
             </p>
             {mission.explain && <Markdown text={mission.explain} />}
             <div className="actions">
@@ -199,7 +220,15 @@ export function MissionPane(props: Props) {
           </div>
         )}
 
-        {!passed && !failed && (
+        {!passed && !failed && mission.type === 'quiz' && (
+          <div className="actions">
+            <button onClick={onReset} title="Start the knowledge check again">
+              Restart
+            </button>
+          </div>
+        )}
+
+        {!passed && !failed && mission.type !== 'quiz' && (
           <div className="actions">
             <button className="primary" onClick={onCheck}>
               Check
