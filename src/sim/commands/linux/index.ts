@@ -13,7 +13,7 @@ import { grep } from './grep';
 import { head, tail } from './headtail';
 import { kill } from './kill';
 import { ls } from './ls';
-import { clear, falseCmd, help, history, trueCmd } from './misc';
+import { clear, exit, falseCmd, help, history, sleep, trueCmd } from './misc';
 import { mkdir } from './mkdir';
 import { mv } from './mv';
 import { ps } from './ps';
@@ -27,5 +27,5 @@ import { wc } from './wc';
 export const linuxCommands: CommandDef[] = [
   ls, cd, pwd, cat, echo, touch, mkdir, rm, cp, mv, head, tail, grep, find, wc, sort, uniq,
   chmod, chown, ps, kill, whoami, id, env, exportCmd, unset, df, du, curl,
-  help, history, clear, trueCmd, falseCmd,
+  help, history, clear, trueCmd, falseCmd, sleep, exit,
 ];

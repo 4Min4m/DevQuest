@@ -45,3 +45,43 @@ export const clear: CommandDef = {
 
 export const trueCmd: CommandDef = { name: 'true', summary: 'do nothing, successfully', run: () => 0 };
 export const falseCmd: CommandDef = { name: 'false', summary: 'do nothing, unsuccessfully', run: () => 1 };
+
+const UNITS: Record<string, number> = { '': 1, s: 1, m: 60, h: 3600, d: 86400 };
+
+/** `sleep` returns at once but advances the simulated clock (so `docker ps` uptimes move). */
+export const sleep: CommandDef = {
+  name: 'sleep',
+  summary: 'delay for a specified amount of time (instantly, in simulated time)',
+  run(ctx) {
+    if (!ctx.args.length) {
+      ctx.err("sleep: missing operand\nTry 'sleep --help' for more information.\n");
+      return 1;
+    }
+    let total = 0;
+    for (const a of ctx.args) {
+      const m = /^(\d+(?:\.\d+)?)([smhd]?)$/.exec(a);
+      if (!m && a !== 'infinity') {
+        ctx.err(`sleep: invalid time interval '${a}'\nTry 'sleep --help' for more information.\n`);
+        return 1;
+      }
+      if (a === 'infinity') {
+        ctx.err("devquest: 'sleep infinity' would never return; skipping\n");
+        return 0;
+      }
+      total += Number(m![1]) * UNITS[m![2]];
+    }
+    ctx.state.clock += Math.round(total * 1000);
+    return 0;
+  },
+};
+
+export const exit: CommandDef = {
+  name: 'exit',
+  summary: 'exit the shell (inside a container: return to the host)',
+  run(ctx) {
+    const code = ctx.args[0] !== undefined ? Number(ctx.args[0]) & 255 : ctx.state.lastExit;
+    if (ctx.state.context) return code; // e.g. `sh -c "...; exit 3"` inside a container
+    ctx.err("devquest: this is your main shell — there's nothing to exit to\n");
+    return code;
+  },
+};

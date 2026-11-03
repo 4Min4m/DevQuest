@@ -6,6 +6,8 @@ export type Stream = 'stdout' | 'stderr';
 export interface OutputChunk {
   stream: Stream;
   text: string;
+  /** Informational stderr (e.g. docker pull progress) — the UI shouldn't style it as an error. */
+  note?: boolean;
 }
 
 export interface CommandContext {
@@ -23,6 +25,8 @@ export interface CommandContext {
   vfs: Vfs;
   out(text: string): void;
   err(text: string): void;
+  /** Informational text on stderr (progress, warnings) — same stream, not shown as an error. */
+  note(text: string): void;
   /** Resolve a user-supplied path against the cwd. */
   resolve(path: string): string;
   /** Access to the shell for builtins (help, history, clear). */
@@ -32,6 +36,18 @@ export interface CommandContext {
 export interface ShellApi {
   listCommands(): CommandDef[];
   requestClear(): void;
+  /** A separate shell over another machine state (e.g. a container), sharing the command set. */
+  spawn(state: SimState): ShellLike;
+  /**
+   * Hand the interactive terminal to a nested shell (`docker exec -it`) until the user
+   * types `exit`; `onExit` receives the exit status.
+   */
+  attach(state: SimState, onExit: (code: number) => void): void;
+}
+
+/** The part of Shell other modules may drive. */
+export interface ShellLike {
+  run(line: string): RunResult;
 }
 
 export interface CommandDef {

@@ -24,8 +24,12 @@ const NOT_SIMULATED = new Set([
   'systemctl', 'journalctl', 'ssh', 'scp', 'wget', 'tar', 'gzip', 'ln', 'stat', 'file', 'top',
   'htop', 'tr', 'cut', 'xargs', 'tee', 'diff', 'which', 'man', 'ping', 'ip', 'ss', 'netstat',
   'lsof', 'free', 'uptime', 'date', 'git', 'python', 'python3', 'node', 'make', 'bash', 'sh',
-  'docker', 'kubectl',
+  'docker-compose',
+  'kubectl',
 ]);
+
+/** Commands that don't exist inside containers. */
+const HOST_ONLY = new Set(['docker']);
 
 /** Pseudo-PID of the interactive shell (`$$`). */
 const SHELL_PID = 1001;
@@ -34,6 +38,8 @@ export class Shell {
   private readonly commands = new Map<string, CommandDef>();
   private output: OutputChunk[] = [];
   private clearRequested = false;
+  /** Interactive nested shell (docker exec -it) that currently owns the terminal. */
+  private nested: { shell: Shell; onExit: (code: number) => void } | null = null;
 
   constructor(public state: SimState, commands: CommandDef[] = []) {
     for (const c of commands) this.register(c);
@@ -51,8 +57,26 @@ export class Shell {
     return [...this.commands.keys()].sort();
   }
 
+  /** The shell that currently receives typed input (innermost nested shell). */
+  get active(): Shell {
+    return this.nested ? this.nested.shell.active : this;
+  }
+
+  /** Machine state of the active shell — what the prompt should describe. */
+  get activeState(): SimState {
+    return this.active.state;
+  }
+
+  /** A new shell over `state` with the same commands (minus host-only ones inside containers). */
+  spawn(state: SimState): Shell {
+    const missing = new Set(state.context ? [...HOST_ONLY, ...state.context.lacks] : []);
+    const defs = [...this.commands.values()].filter((d) => !missing.has(d.name));
+    return new Shell(state, defs);
+  }
+
   /** Tab completion for the interactive terminal. */
   complete(line: string, cursor: number): Completion {
+    if (this.nested) return this.nested.shell.complete(line, cursor);
     return complete(line, cursor, {
       commands: this.commandNames(),
       vfs: this.vfs(),
@@ -63,6 +87,7 @@ export class Shell {
 
   /** Execute one line of input exactly like an interactive bash prompt would. */
   run(line: string): RunResult {
+    if (this.nested) return this.runNested(line);
     this.output = [];
     this.clearRequested = false;
     const state = this.state;
@@ -89,15 +114,32 @@ export class Shell {
     return this.result();
   }
 
+  private runNested(line: string): RunResult {
+    const nested = this.nested!;
+    // Let deeper nesting handle its own `exit` first.
+    if (!nested.shell.nested) {
+      const m = /^\s*exit(?:\s+(\d+))?\s*$/.exec(line);
+      if (m) {
+        const code = m[1] !== undefined ? Number(m[1]) : nested.shell.state.lastExit;
+        this.nested = null;
+        nested.onExit(code);
+        this.state.history.push(line);
+        this.state.lastExit = code;
+        return { output: [{ stream: 'stdout', text: 'exit\n' }], exitCode: code, clear: false };
+      }
+    }
+    return nested.shell.run(line);
+  }
+
   private result(): RunResult {
     return { output: this.output, exitCode: this.state.lastExit, clear: this.clearRequested };
   }
 
-  private emit(stream: Stream, text: string): void {
+  private emit(stream: Stream, text: string, note = false): void {
     if (!text) return;
     const last = this.output[this.output.length - 1];
-    if (last && last.stream === stream) last.text += text;
-    else this.output.push({ stream, text });
+    if (last && last.stream === stream && !!last.note === note) last.text += text;
+    else this.output.push(note ? { stream, text, note } : { stream, text });
   }
 
   private getVar = (name: string): string | undefined => {
@@ -167,11 +209,11 @@ export class Shell {
     const redirectError = this.applyRedirects(cmd.redirects, sinks, vfs, ectx, (input) => (stdin = input));
     if (redirectError !== null) return { code: redirectError, piped: '' };
 
-    const write = (fd: 1 | 2, text: string) => {
+    const write = (fd: 1 | 2, text: string, note = false) => {
       const sink = sinks[fd];
       switch (sink.kind) {
         case 'terminal':
-          this.emit(sink.stream, text);
+          this.emit(sink.stream, text, note);
           break;
         case 'pipe':
           piped += text;
@@ -207,6 +249,10 @@ export class Shell {
         requestClear: () => {
           this.clearRequested = true;
         },
+        spawn: (s) => this.spawn(s),
+        attach: (s, onExit) => {
+          this.nested = { shell: this.spawn(s), onExit };
+        },
       };
       const ctx: CommandContext = {
         name,
@@ -218,6 +264,7 @@ export class Shell {
         vfs,
         out: (t) => write(1, t),
         err: (t) => write(2, t),
+        note: (t) => write(2, t, true),
         resolve: (p) => resolvePath(state.cwd, p),
         shell: shellApi,
       };
@@ -228,7 +275,7 @@ export class Shell {
         code = 1;
       }
     }
-    state.commandLog.push({ argv, exitCode: code });
+    state.commandLog.push(state.context ? { argv, exitCode: code, container: state.context.containerName } : { argv, exitCode: code });
     return { code, piped };
   }
 
@@ -256,7 +303,9 @@ export class Shell {
       err(`devquest: '${name}' is a real command, but it is not available in this simulator yet\n`);
       return 127;
     }
-    err(`bash: ${name}: command not found\n`);
+    // busybox/dash style shells word it differently from bash.
+    if (this.state.context?.promptStyle === 'sh') err(`sh: ${name}: not found\n`);
+    else err(`bash: ${name}: command not found\n`);
     return 127;
   }
 

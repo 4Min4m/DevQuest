@@ -11,6 +11,9 @@ browser terminal. No backend, no runtime network calls. See [CLAUDE.md](CLAUDE.m
   (Linux Basics, Files & Permissions, Processes, Text Processing).
 - **Step 3 done:** XP and levels, daily streak, 3 hearts per lesson, unlocking, skill tree
   and profile screens, progress saved in localStorage with JSON export/import.
+- **Step 4 done:** simulated Docker engine — images, containers, ports, logs, exec (including
+  interactive `exec -it` shells), volumes, bind mounts, networks with container DNS, inspect —
+  plus a free-play Sandbox page.
 
 ## Develop
 
@@ -31,6 +34,10 @@ src/sim/vfs/                in-memory filesystem (modes, owners, mtimes, errno-s
 src/sim/shell/              lexer/parser → AST, expansion ($VAR, ~, globs), executor
                             (pipes, > >> < 2> 2>&1 &>, && || ;), tab completion
 src/sim/commands/linux/     one module per command group, each with tests
+src/sim/docker/             Docker engine: catalog (offline registry), programs (what runs in
+                            containers: nginx, postgres, redis, python/node apps...), engine,
+                            cli/ (docker run, ps, exec, logs, volume, network, inspect...)
+src/sim/net.ts              simulated HTTP for curl (containers register as providers)
 src/game/                   mission engine: initial-state builder, validators, MissionSession;
                             progress.ts (XP, levels, streak, hearts, unlocking, skill tree),
                             store.ts (Zustand store persisted to localStorage)
@@ -45,6 +52,12 @@ scripts/sim-cli.ts          run the simulator in a real terminal
 
 `ls cd pwd cat echo touch mkdir rm cp mv head tail grep find wc sort uniq chmod chown
 ps kill whoami id env export unset df du curl help history clear true false`
+
+`docker`: `run create ps start stop restart kill rm logs exec port inspect images pull rmi`,
+`volume create|ls|rm|inspect|prune`, `network create|ls|rm|inspect|connect|disconnect`,
+`container …` / `image …` aliases. Offline images: nginx, httpd, redis, postgres, mysql, alpine,
+busybox, ubuntu, node, python, hello-world, curlimages/curl. (`docker build` and `docker compose`
+arrive with their lessons in step 5.)
 
 Run `<command> --help` to see which options the simulator supports. Real commands that
 aren't simulated yet (e.g. `sed`, `vim`, `sudo`) say so explicitly instead of failing silently.

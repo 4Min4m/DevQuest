@@ -1,3 +1,4 @@
+import type { DockerState } from './docker/types';
 import { makeDir, makeFile } from './vfs/vfs';
 import type { DirNode, FsNode } from './vfs/types';
 
@@ -30,6 +31,21 @@ export interface SimState {
   commandLog: CommandLogEntry[];
   /** Fixed clock for deterministic output (ms since epoch). Advances 1s per command line. */
   clock: number;
+  /** The simulated Docker engine (absent inside containers). */
+  docker?: DockerState;
+  /** Set when this state is a container's view of the world (docker exec). */
+  context?: ContainerContext;
+}
+
+export interface ContainerContext {
+  containerId: string;
+  containerName: string;
+  /** `bash` → `root@abc123:/# `, `sh` → `/ # ` */
+  promptStyle: 'bash' | 'sh';
+  /** The host machine, for resolving container networking. */
+  host: SimState;
+  /** Commands this container's image doesn't ship. */
+  lacks: string[];
 }
 
 export interface UserEntry {
@@ -80,6 +96,8 @@ export interface HttpResponse {
 export interface CommandLogEntry {
   argv: string[];
   exitCode: number;
+  /** Name of the container the command ran in (docker exec), if any. */
+  container?: string;
 }
 
 export const DEFAULT_CLOCK = Date.UTC(2026, 10, 3, 9, 0, 0);
@@ -114,7 +132,7 @@ export function createDefaultFs(clock = DEFAULT_CLOCK): DirNode {
           'root:x:0:0:root:/root:/bin/bash\n' +
           'student:x:1000:1000:Student:/home/student:/bin/bash\n' +
           'www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin\n',
-        group: 'root:x:0:\nsudo:x:27:student\nwww-data:x:33:\nstudent:x:1000:\n',
+        group: 'root:x:0:\nsudo:x:27:student\nwww-data:x:33:\ndocker:x:999:student\nstudent:x:1000:\n',
         'os-release': 'NAME="DevQuest Linux"\nID=devquest\nVERSION_ID="1.0"\n',
       },
       home: {
@@ -177,6 +195,7 @@ export function createInitialState(overrides: Partial<SimState> = {}): SimState 
       { name: 'root', gid: 0, members: [] },
       { name: 'sudo', gid: 27, members: ['student'] },
       { name: 'www-data', gid: 33, members: [] },
+      { name: 'docker', gid: 999, members: ['student'] },
       { name: 'student', gid: 1000, members: [] },
     ],
     processes: [
@@ -201,6 +220,7 @@ export function createInitialState(overrides: Partial<SimState> = {}): SimState 
     history: [],
     commandLog: [],
     clock,
+    docker: createDockerState(clock),
   };
   return { ...base, ...overrides };
 }
@@ -225,4 +245,28 @@ function proc(
 /** Deep copy, e.g. to snapshot a mission's initial state. */
 export function cloneState(state: SimState): SimState {
   return structuredClone(state);
+}
+
+/** A Docker engine with no images or containers, just the built-in networks. */
+export function createDockerState(clock = DEFAULT_CLOCK): DockerState {
+  const net = (name: string, driver: 'bridge' | 'host' | 'null', subnet: string, id: string) => ({
+    id,
+    name,
+    driver,
+    subnet,
+    created: clock - 30 * 86_400_000,
+    builtin: true,
+  });
+  return {
+    daemonRunning: true,
+    images: [],
+    containers: [],
+    volumes: [],
+    networks: [
+      net('bridge', 'bridge', '172.17.0', '4f1c2e8a9b7d6c5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e'),
+      net('host', 'host', '', '9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b'),
+      net('none', 'null', '', '1e2d3c4b5a6f7e8d9c0b1a2f3e4d5c6b7a8f9e0d1c2b3a4f5e6d7c8b9a0f1e2d'),
+    ],
+    seq: 0,
+  };
 }

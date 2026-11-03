@@ -6,6 +6,7 @@ describe('hash router', () => {
     expect(parseHash('')).toEqual({ view: 'tree' });
     expect(parseHash('#/tree')).toEqual({ view: 'tree' });
     expect(parseHash('#/profile')).toEqual({ view: 'profile' });
+    expect(parseHash('#/sandbox')).toEqual({ view: 'sandbox' });
     expect(parseHash('#/lesson/processes/2')).toEqual({ view: 'lesson', lessonId: 'processes', mission: 1 });
     expect(parseHash('#/lesson/processes')).toEqual({ view: 'lesson', lessonId: 'processes', mission: 0 });
     expect(parseHash('#/lesson/x/abc')).toEqual({ view: 'lesson', lessonId: 'x', mission: 0 });

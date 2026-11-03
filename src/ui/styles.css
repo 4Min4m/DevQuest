@@ -719,3 +719,36 @@ body {
     flex: 1;
   }
 }
+
+/* ---------- step 4: sandbox ---------- */
+
+.sandbox {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.sandbox .terminal-area {
+  flex: 1;
+}
+
+.sandbox-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px 0;
+  font-size: 14px;
+}
+
+.sandbox-bar button {
+  font: inherit;
+  font-size: 14px;
+  padding: 4px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--chip);
+  color: var(--text);
+  cursor: pointer;
+}

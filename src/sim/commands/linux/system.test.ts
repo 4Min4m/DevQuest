@@ -10,10 +10,10 @@ describe('whoami / id', () => {
   });
   it('id formats', () => {
     const t = makeShell();
-    expect(t.run('id').out).toBe('uid=1000(student) gid=1000(student) groups=1000(student),27(sudo)\n');
+    expect(t.run('id').out).toBe('uid=1000(student) gid=1000(student) groups=1000(student),27(sudo),999(docker)\n');
     expect(t.run('id -u').out).toBe('1000\n');
     expect(t.run('id -un').out).toBe('student\n');
-    expect(t.run('id -Gn').out).toBe('student sudo\n');
+    expect(t.run('id -Gn').out).toBe('student sudo docker\n');
     expect(t.run('id root').out).toBe('uid=0(root) gid=0(root) groups=0(root)\n');
     expect(t.run('id bob')).toMatchObject({ err: "id: 'bob': no such user\n", code: 1 });
   });
@@ -183,5 +183,33 @@ describe('help / history / true / false', () => {
     const t = makeShell();
     expect(t.run('true').code).toBe(0);
     expect(t.run('false').code).toBe(1);
+  });
+});
+
+describe('sleep / exit', () => {
+  it('sleep advances the simulated clock instantly', () => {
+    const t = makeShell();
+    const before = t.state.clock;
+    expect(t.run('sleep 2m 30')).toEqual({ out: '', err: '', code: 0 });
+    expect(t.state.clock - before).toBe(1000 + 150_000);
+  });
+  it('sleep errors', () => {
+    const t = makeShell();
+    expect(t.run('sleep')).toMatchObject({ err: "sleep: missing operand\nTry 'sleep --help' for more information.\n", code: 1 });
+    expect(t.run('sleep abc').err).toBe("sleep: invalid time interval 'abc'\nTry 'sleep --help' for more information.\n");
+    expect(t.run('sleep infinity').err).toMatch(/would never return/);
+  });
+  it('exit in the main shell explains itself', () => {
+    const t = makeShell();
+    expect(t.run('exit 3')).toMatchObject({ err: "devquest: this is your main shell — there's nothing to exit to\n", code: 3 });
+  });
+});
+
+describe('curl flag handling', () => {
+  it('accepts combined short flags', () => {
+    const t = makeShell();
+    expect(t.run('curl -sSf http://nowhere.test')).toEqual({ out: '', err: 'curl: (6) Could not resolve host: nowhere.test\n', code: 6 });
+    expect(t.run('curl -sI http://example.com').out).toMatch(/^HTTP\/1.1 200 OK/);
+    expect(t.run('curl --help').out).toMatch(/^Usage: curl/);
   });
 });

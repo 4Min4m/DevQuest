@@ -5,10 +5,10 @@
  */
 import { createInterface } from 'node:readline';
 import { createShell } from '../src/sim';
-import { tildify } from '../src/sim/vfs/path';
+import { plainPrompt } from '../src/sim/prompt';
 
 const shell = createShell();
-const prompt = () => `${shell.state.user}@${shell.state.hostname}:${tildify(shell.state.cwd, shell.state.vars.HOME ?? '/')}$ `;
+const prompt = () => plainPrompt(shell.activeState);
 const exec = (line: string) => {
   for (const chunk of shell.run(line).output) (chunk.stream === 'stderr' ? process.stderr : process.stdout).write(chunk.text);
 };

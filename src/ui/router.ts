@@ -4,11 +4,13 @@ import { useEffect, useState } from 'react';
 export type Route =
   | { view: 'tree' }
   | { view: 'profile' }
+  | { view: 'sandbox' }
   | { view: 'lesson'; lessonId: string; mission: number };
 
 export function parseHash(hash: string): Route {
   const parts = hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
   if (parts[0] === 'profile') return { view: 'profile' };
+  if (parts[0] === 'sandbox') return { view: 'sandbox' };
   if (parts[0] === 'lesson' && parts[1]) {
     const n = Number(parts[2] ?? '1');
     return { view: 'lesson', lessonId: parts[1], mission: Number.isInteger(n) && n >= 1 ? n - 1 : 0 };
@@ -18,6 +20,7 @@ export function parseHash(hash: string): Route {
 
 export function routeHash(r: Route): string {
   if (r.view === 'profile') return '#/profile';
+  if (r.view === 'sandbox') return '#/sandbox';
   if (r.view === 'lesson') return `#/lesson/${encodeURIComponent(r.lessonId)}/${r.mission + 1}`;
   return '#/tree';
 }

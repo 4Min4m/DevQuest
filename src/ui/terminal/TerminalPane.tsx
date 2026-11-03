@@ -4,11 +4,12 @@ import '@xterm/xterm/css/xterm.css';
 import { useEffect, useRef } from 'react';
 import type { Shell } from '../../sim/shell/shell';
 import type { RunResult } from '../../sim/shell/types';
-import { tildify } from '../../sim/vfs/path';
+import { promptParts } from '../../sim/prompt';
 import { LineEditor } from './lineEditor';
 
 const GREEN = '\x1b[1;32m';
 const BLUE = '\x1b[1;34m';
+const YELLOW = '\x1b[1;33m';
 const RED = '\x1b[31m';
 const RESET = '\x1b[0m';
 
@@ -18,10 +19,11 @@ export function toTerminal(text: string): string {
 }
 
 export function promptFor(shell: Shell): string {
-  const s = shell.state;
-  const where = tildify(s.cwd, s.vars.HOME ?? '/');
-  const sigil = s.user === 'root' ? '#' : '$';
-  return `${GREEN}${s.user}@${s.hostname}${RESET}:${BLUE}${where}${RESET}${sigil} `;
+  const p = promptParts(shell.activeState);
+  if (p.style === 'sh') return `${p.path} ${p.sigil} `;
+  // Inside a container the user@host part is shown in a different colour.
+  const who = shell.activeState.context ? YELLOW : GREEN;
+  return `${who}${p.userHost}${RESET}:${BLUE}${p.path}${RESET}${p.sigil} `;
 }
 
 interface Props {
@@ -70,7 +72,7 @@ export function TerminalPane({ shell, banner, execute, onCommand }: Props) {
           if (result.clear) term.clear();
           for (const chunk of result.output) {
             const text = toTerminal(chunk.text);
-            term.write(chunk.stream === 'stderr' ? RED + text + RESET : text);
+            term.write(chunk.stream === 'stderr' && !chunk.note ? RED + text + RESET : text);
           }
           const extra = callbacks.current.onCommand?.(ev.line, result);
           if (extra) term.write(toTerminal(extra));
