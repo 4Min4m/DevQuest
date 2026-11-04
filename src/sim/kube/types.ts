@@ -20,6 +20,7 @@ export interface Meta {
   ownerReferences?: { apiVersion: string; kind: string; name: string; uid: string; controller: boolean; blockOwnerDeletion: boolean }[];
   deletionTimestamp?: string;
   generateName?: string;
+  finalizers?: string[];
 }
 
 export interface KObj {
@@ -158,4 +159,8 @@ export interface KubeState {
   lastTick: number;
   seq: number;
   forwards: PortForward[];
+  /** Data of PersistentVolumes, by PV name (mounted into pods by reference). */
+  volumes?: Record<string, DirNode>;
+  /** Extra CPU demand in millicores on workloads ("ns/name"), e.g. traffic for the HPA. */
+  load?: Record<string, number>;
 }

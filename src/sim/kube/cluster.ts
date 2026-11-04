@@ -25,11 +25,27 @@ export const RESOURCES: ResourceInfo[] = [
   { kind: 'ReplicaSet', plural: 'replicasets', singular: 'replicaset', short: ['rs'], apiVersion: 'apps/v1', namespaced: true },
   { kind: 'DaemonSet', plural: 'daemonsets', singular: 'daemonset', short: ['ds'], apiVersion: 'apps/v1', namespaced: true },
   { kind: 'Job', plural: 'jobs', singular: 'job', short: [], apiVersion: 'batch/v1', namespaced: true },
+  { kind: 'StatefulSet', plural: 'statefulsets', singular: 'statefulset', short: ['sts'], apiVersion: 'apps/v1', namespaced: true },
+  { kind: 'CronJob', plural: 'cronjobs', singular: 'cronjob', short: ['cj'], apiVersion: 'batch/v1', namespaced: true },
+  { kind: 'PersistentVolumeClaim', plural: 'persistentvolumeclaims', singular: 'persistentvolumeclaim', short: ['pvc'], apiVersion: 'v1', namespaced: true },
+  { kind: 'PersistentVolume', plural: 'persistentvolumes', singular: 'persistentvolume', short: ['pv'], apiVersion: 'v1', namespaced: false },
+  { kind: 'StorageClass', plural: 'storageclasses', singular: 'storageclass', short: ['sc'], apiVersion: 'storage.k8s.io/v1', namespaced: false },
+  { kind: 'Ingress', plural: 'ingresses', singular: 'ingress', short: ['ing'], apiVersion: 'networking.k8s.io/v1', namespaced: true },
+  { kind: 'IngressClass', plural: 'ingressclasses', singular: 'ingressclass', short: [], apiVersion: 'networking.k8s.io/v1', namespaced: false },
+  { kind: 'NetworkPolicy', plural: 'networkpolicies', singular: 'networkpolicy', short: ['netpol'], apiVersion: 'networking.k8s.io/v1', namespaced: true },
+  { kind: 'HorizontalPodAutoscaler', plural: 'horizontalpodautoscalers', singular: 'horizontalpodautoscaler', short: ['hpa'], apiVersion: 'autoscaling/v2', namespaced: true },
+  { kind: 'ServiceAccount', plural: 'serviceaccounts', singular: 'serviceaccount', short: ['sa'], apiVersion: 'v1', namespaced: true },
+  { kind: 'Role', plural: 'roles', singular: 'role', short: [], apiVersion: 'rbac.authorization.k8s.io/v1', namespaced: true },
+  { kind: 'RoleBinding', plural: 'rolebindings', singular: 'rolebinding', short: [], apiVersion: 'rbac.authorization.k8s.io/v1', namespaced: true },
+  { kind: 'ClusterRole', plural: 'clusterroles', singular: 'clusterrole', short: [], apiVersion: 'rbac.authorization.k8s.io/v1', namespaced: false },
+  { kind: 'ClusterRoleBinding', plural: 'clusterrolebindings', singular: 'clusterrolebinding', short: [], apiVersion: 'rbac.authorization.k8s.io/v1', namespaced: false },
 ];
 
 export function resourceFor(word: string): ResourceInfo | undefined {
-  const w = word.toLowerCase().replace(/\.(apps|batch|v1|apps\/v1)$/, '');
-  return RESOURCES.find((r) => r.plural === w || r.singular === w || r.short.includes(w) || r.kind.toLowerCase() === w);
+  const find = (w: string) => RESOURCES.find((r) => r.plural === w || r.singular === w || r.short.includes(w) || r.kind.toLowerCase() === w);
+  const w = word.toLowerCase();
+  // "deployments.apps", "ingresses.networking.k8s.io", "roles.rbac.authorization.k8s.io"
+  return find(w) ?? (w.includes('.') ? find(w.slice(0, w.indexOf('.'))) : undefined);
 }
 
 export function infoOf(kind: string): ResourceInfo {
@@ -179,6 +195,14 @@ export const SYSTEM_IMAGES: Record<string, AppSpec> = {
     memMi: 14,
     cpuM: 3,
   },
+  'registry.k8s.io/metrics-server/metrics-server:v0.7.2': { listen: [10250], http: { '/livez': { body: 'ok' }, '/readyz': { body: 'ok' } }, logs: ['I1103 08:59:59.000000       1 serving.go:374] Generated self-signed cert in-memory', 'I1103 09:00:00.000000       1 secure_serving.go:213] Serving securely on [::]:10250'], memMi: 21, cpuM: 4 },
+  'registry.k8s.io/ingress-nginx/controller:v1.11.3': {
+    listen: [80, 443, 10254],
+    http: { '/healthz': { body: 'ok' } },
+    logs: ['-------------------------------------------------------------------------------', 'NGINX Ingress controller', '  Release:       v1.11.3', '  Build:         0106de65cfccb74405a6dfa7d9daffc6f0a6ef1a', '  Repository:    https://github.com/kubernetes/ingress-nginx', '  nginx version: nginx/1.25.5', '', '-------------------------------------------------------------------------------', 'I1103 09:00:00.000000       7 controller.go:213] "Backend successfully reloaded"'],
+    memMi: 95,
+    cpuM: 3,
+  },
   'docker.io/kindest/local-path-provisioner:v20241023-a345ebe4': { logs: ['I1103 08:59:59.000000 1 controller.go:811] Starting provisioner controller'], memMi: 9, cpuM: 1 },
 };
 
@@ -194,7 +218,10 @@ function node(ks: KubeState, n: (typeof NODES)[number], created: number): KObj {
     'kubernetes.io/hostname': n.name,
     'kubernetes.io/os': 'linux',
   };
-  if (n.controlPlane) labels['node-role.kubernetes.io/control-plane'] = '';
+  if (n.controlPlane) {
+    labels['node-role.kubernetes.io/control-plane'] = '';
+    labels['ingress-ready'] = 'true';
+  }
   return {
     apiVersion: 'v1',
     kind: 'Node',
@@ -312,6 +339,115 @@ export function createKubeState(now: number): KubeState {
       progressDeadlineSeconds: 600,
     },
     status: {},
+  });
+  // Default StorageClass (kind's local-path provisioner).
+  putObj(ks, {
+    apiVersion: 'storage.k8s.io/v1',
+    kind: 'StorageClass',
+    metadata: newMeta(ks, t0, 'standard', undefined, { annotations: { 'storageclass.kubernetes.io/is-default-class': 'true' } }),
+    provisioner: 'rancher.io/local-path',
+    reclaimPolicy: 'Delete',
+    volumeBindingMode: 'WaitForFirstConsumer',
+  });
+  // metrics-server (kubectl top, HPA).
+  putObj(ks, {
+    apiVersion: 'apps/v1',
+    kind: 'Deployment',
+    metadata: newMeta(ks, t0, 'metrics-server', 'kube-system', { labels: { 'k8s-app': 'metrics-server' }, generation: 1, annotations: { 'deployment.kubernetes.io/revision': '1' } }),
+    spec: {
+      replicas: 1,
+      selector: { matchLabels: { 'k8s-app': 'metrics-server' } },
+      template: { metadata: { labels: { 'k8s-app': 'metrics-server' } }, spec: podSpec([container('metrics-server', 'registry.k8s.io/metrics-server/metrics-server:v0.7.2', { resources: { requests: { cpu: '100m', memory: '200Mi' } } })], { priorityClassName: 'system-cluster-critical' }) },
+      strategy: { type: 'RollingUpdate', rollingUpdate: { maxSurge: '25%', maxUnavailable: 0 } },
+      revisionHistoryLimit: 10,
+      progressDeadlineSeconds: 600,
+    },
+    status: {},
+  });
+  // ingress-nginx, as installed for kind (host port 80 → the controller).
+  putObj(ks, ns(ks, 'ingress-nginx', t0));
+  const ingLabels = { 'app.kubernetes.io/component': 'controller', 'app.kubernetes.io/instance': 'ingress-nginx', 'app.kubernetes.io/name': 'ingress-nginx' };
+  putObj(ks, {
+    apiVersion: 'apps/v1',
+    kind: 'Deployment',
+    metadata: newMeta(ks, t0, 'ingress-nginx-controller', 'ingress-nginx', { labels: ingLabels, generation: 1, annotations: { 'deployment.kubernetes.io/revision': '1' } }),
+    spec: {
+      replicas: 1,
+      selector: { matchLabels: ingLabels },
+      template: {
+        metadata: { labels: ingLabels },
+        spec: podSpec([container('controller', 'registry.k8s.io/ingress-nginx/controller:v1.11.3', { ports: [{ containerPort: 80, hostPort: 80, name: 'http', protocol: 'TCP' }, { containerPort: 443, hostPort: 443, name: 'https', protocol: 'TCP' }], resources: { requests: { cpu: '100m', memory: '90Mi' } } })], {
+          nodeSelector: { 'ingress-ready': 'true', 'kubernetes.io/os': 'linux' },
+          tolerations: [{ effect: 'NoSchedule', key: 'node-role.kubernetes.io/control-plane', operator: 'Equal' }],
+        }),
+      },
+      strategy: { type: 'RollingUpdate', rollingUpdate: { maxSurge: '25%', maxUnavailable: 1 } },
+      revisionHistoryLimit: 10,
+      progressDeadlineSeconds: 600,
+    },
+    status: {},
+  });
+  putObj(ks, {
+    apiVersion: 'v1',
+    kind: 'Service',
+    metadata: newMeta(ks, t0, 'ingress-nginx-controller', 'ingress-nginx', { labels: ingLabels }),
+    spec: {
+      clusterIP: '10.96.88.20',
+      clusterIPs: ['10.96.88.20'],
+      ports: [
+        { appProtocol: 'http', name: 'http', nodePort: 31080, port: 80, protocol: 'TCP', targetPort: 'http' },
+        { appProtocol: 'https', name: 'https', nodePort: 31443, port: 443, protocol: 'TCP', targetPort: 'https' },
+      ],
+      selector: ingLabels,
+      sessionAffinity: 'None',
+      type: 'NodePort',
+      externalTrafficPolicy: 'Cluster',
+    },
+    status: { loadBalancer: {} },
+  });
+  putObj(ks, { apiVersion: 'networking.k8s.io/v1', kind: 'IngressClass', metadata: newMeta(ks, t0, 'nginx', undefined, { labels: ingLabels }), spec: { controller: 'k8s.io/ingress-nginx' } });
+  // RBAC: the built-in user-facing ClusterRoles, and cluster-admin for kubeadm's admin group.
+  const rule = (apiGroups: string[], resources: string[], verbs: string[]) => ({ apiGroups, resources, verbs });
+  const READ = ['get', 'list', 'watch'];
+  const WRITE = ['create', 'delete', 'deletecollection', 'patch', 'update'];
+  const viewRules = [
+    rule([''], ['configmaps', 'endpoints', 'persistentvolumeclaims', 'pods', 'pods/log', 'pods/status', 'replicationcontrollers', 'services', 'serviceaccounts', 'events', 'namespaces', 'limitranges', 'resourcequotas'], READ),
+    rule(['apps'], ['daemonsets', 'deployments', 'deployments/scale', 'replicasets', 'statefulsets'], READ),
+    rule(['batch'], ['cronjobs', 'jobs'], READ),
+    rule(['autoscaling'], ['horizontalpodautoscalers'], READ),
+    rule(['networking.k8s.io'], ['ingresses', 'networkpolicies'], READ),
+  ];
+  const editRules = [
+    rule([''], ['pods', 'pods/attach', 'pods/exec', 'pods/portforward', 'pods/proxy', 'configmaps', 'secrets', 'services', 'persistentvolumeclaims', 'serviceaccounts', 'endpoints', 'replicationcontrollers'], WRITE),
+    rule([''], ['secrets'], READ),
+    rule(['apps'], ['daemonsets', 'deployments', 'deployments/rollback', 'deployments/scale', 'replicasets', 'replicasets/scale', 'statefulsets', 'statefulsets/scale'], WRITE),
+    rule(['batch'], ['cronjobs', 'jobs'], WRITE),
+    rule(['autoscaling'], ['horizontalpodautoscalers'], WRITE),
+    rule(['networking.k8s.io'], ['ingresses', 'networkpolicies'], WRITE),
+    ...viewRules,
+  ];
+  const adminRules = [rule(['rbac.authorization.k8s.io'], ['rolebindings', 'roles'], [...READ, ...WRITE]), ...editRules];
+  for (const [name, rules] of [
+    ['cluster-admin', [rule(['*'], ['*'], ['*']), { nonResourceURLs: ['*'], verbs: ['*'] }]],
+    ['admin', adminRules],
+    ['edit', editRules],
+    ['view', viewRules],
+  ] as const) {
+    putObj(ks, { apiVersion: 'rbac.authorization.k8s.io/v1', kind: 'ClusterRole', metadata: newMeta(ks, t0, name, undefined, { labels: { 'kubernetes.io/bootstrapping': 'rbac-defaults' } }), rules: rules as unknown as J[] });
+  }
+  putObj(ks, {
+    apiVersion: 'rbac.authorization.k8s.io/v1',
+    kind: 'ClusterRoleBinding',
+    metadata: newMeta(ks, t0, 'kubeadm:cluster-admins', undefined),
+    roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'ClusterRole', name: 'cluster-admin' },
+    subjects: [{ apiGroup: 'rbac.authorization.k8s.io', kind: 'Group', name: 'kubeadm:cluster-admins' }],
+  });
+  putObj(ks, {
+    apiVersion: 'rbac.authorization.k8s.io/v1',
+    kind: 'ClusterRoleBinding',
+    metadata: newMeta(ks, t0, 'cluster-admin', undefined, { labels: { 'kubernetes.io/bootstrapping': 'rbac-defaults' } }),
+    roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'ClusterRole', name: 'cluster-admin' },
+    subjects: [{ apiGroup: 'rbac.authorization.k8s.io', kind: 'Group', name: 'system:masters' }],
   });
   putObj(ks, {
     apiVersion: 'v1',

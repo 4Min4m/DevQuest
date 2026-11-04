@@ -26,6 +26,19 @@ import {
   suffix,
 } from './cluster';
 import { fullRef, imageFs, resolveImage, ResolvedImage } from './images';
+import {
+  antiAffinityBlocks,
+  antiAffinityPenalty,
+  claimData,
+  cronJobController,
+  hpaController,
+  serviceAccountController,
+  setHelpers,
+  statefulSetController,
+  storageController,
+  taintEviction,
+  volumeGate,
+} from './extra';
 import { podShell, podState } from './podshell';
 import { cpuMilli, intOrPercent, memBytes } from './quantity';
 import type { AppSpec, ContainerRun, ContainerRuntime, J, KObj, KubeState, PodRuntime } from './types';
@@ -46,7 +59,7 @@ export function templateHash(template: J): string {
   return suffix(JSON.stringify(template), 10);
 }
 
-function podsOfNode(ks: KubeState, node: string): KObj[] {
+export function podsOfNode(ks: KubeState, node: string): KObj[] {
   return listObjs(ks, 'Pod').filter((p) => p.spec.nodeName === node && !['Succeeded', 'Failed'].includes(p.status?.phase));
 }
 
@@ -67,7 +80,7 @@ export function isPodReady(p: KObj): boolean {
 
 // ------------------------------------------------------------------ pods from templates
 
-function podFromTemplate(ks: KubeState, now: number, owner: KObj, template: J, name: string, extraLabels: Record<string, string>): KObj {
+export function podFromTemplate(ks: KubeState, now: number, owner: KObj, template: J, name: string, extraLabels: Record<string, string>): KObj {
   const meta = newMeta(ks, now, name, owner.metadata.namespace, {
     labels: { ...(template.metadata?.labels ?? {}), ...extraLabels },
     ownerReferences: [ownerRef(owner)],
@@ -92,7 +105,7 @@ export function qosClass(spec: J): string {
   return 'BestEffort';
 }
 
-function deletePod(ks: KubeState, now: number, pod: KObj): void {
+export function deletePod(ks: KubeState, now: number, pod: KObj): void {
   if (isTerminating(pod)) return;
   pod.metadata.deletionTimestamp = iso(now);
   (pod.metadata as J).deletionGracePeriodSeconds = pod.spec.terminationGracePeriodSeconds ?? 30;
@@ -278,7 +291,7 @@ function replicaSetStatus(ks: KubeState): void {
 
 // ------------------------------------------------------------------ daemonsets
 
-function tolerates(pod: J, taint: J): boolean {
+export function tolerates(pod: J, taint: J): boolean {
   return (pod.spec?.tolerations ?? []).some(
     (t: J) => (t.operator === 'Exists' && !t.key) || (t.key === taint.key && (t.operator === 'Exists' || t.value === taint.value) && (!t.effect || t.effect === taint.effect)),
   );
@@ -386,7 +399,7 @@ function jobController(ks: KubeState, now: number): void {
 
 // ------------------------------------------------------------------ scheduler
 
-function matchesNodeSelector(node: KObj, spec: J): boolean {
+export function matchesNodeSelector(node: KObj, spec: J): boolean {
   for (const [k, v] of Object.entries(spec.nodeSelector ?? {})) if (node.metadata.labels?.[k] !== v) return false;
   const terms = spec.affinity?.nodeAffinity?.requiredDuringSchedulingIgnoredDuringExecution?.nodeSelectorTerms;
   if (terms?.length) {
@@ -410,6 +423,17 @@ function scheduler(ks: KubeState, now: number): void {
   const nodes = listObjs(ks, 'Node');
   for (const pod of listObjs(ks, 'Pod')) {
     if (pod.spec.nodeName || isTerminating(pod)) continue;
+    const gate = volumeGate(ks, pod);
+    if (gate.fail) {
+      if (gate.fail.startsWith('waiting')) continue;
+      const msg = `0/${nodes.length} nodes are available: ${gate.fail}. preemption: 0/${nodes.length} nodes are available: ${nodes.length} Preemption is not helpful for scheduling.`;
+      const last = (pod.status as J)._lastSchedAttempt ?? 0;
+      if (now - last >= 60 * SEC || pod.status.conditions?.[0]?.message !== msg) {
+        emit(ks, now, pod, 'Warning', 'FailedScheduling', msg, 'default-scheduler');
+        pod.status = { phase: 'Pending', conditions: [{ type: 'PodScheduled', status: 'False', reason: 'Unschedulable', message: msg, lastProbeTime: null, lastTransitionTime: iso(now) }], qosClass: pod.status.qosClass, _lastSchedAttempt: now };
+      }
+      continue;
+    }
     const req = podRequests(pod);
     const reasons: Record<string, number> = {};
     const fail = (r: string) => (reasons[r] = (reasons[r] ?? 0) + 1);
@@ -428,7 +452,17 @@ function scheduler(ks: KubeState, now: number): void {
         continue;
       }
       if (!matchesNodeSelector(n, pod.spec)) {
-        fail(pod.spec.affinity?.nodeAffinity ? "node(s) didn't match Pod's node affinity/selector" : "node(s) didn't match Pod's node affinity/selector");
+        fail("node(s) didn't match Pod's node affinity/selector");
+        notHelpful++;
+        continue;
+      }
+      if (gate.node && gate.node !== n.metadata.name) {
+        fail('node(s) had volume node affinity conflict');
+        notHelpful++;
+        continue;
+      }
+      if (antiAffinityBlocks(ks, pod, n)) {
+        fail("node(s) didn't match pod anti-affinity rules");
         notHelpful++;
         continue;
       }
@@ -451,7 +485,7 @@ function scheduler(ks: KubeState, now: number): void {
       // Least-allocated plus spreading pods of the same owner across nodes (default topology spread).
       const owner = pod.metadata.ownerReferences?.[0]?.uid;
       const siblings = owner ? podsOfNode(ks, n.metadata.name).filter((p) => p.metadata.ownerReferences?.[0]?.uid === owner).length : 0;
-      fits.push({ node: n, score: siblings * 10 + podsOfNode(ks, n.metadata.name).length * 0.1 + used.cpu / cpuMilli(n.status.allocatable.cpu) + used.mem / memBytes(n.status.allocatable.memory) });
+      fits.push({ node: n, score: antiAffinityPenalty(ks, pod, n) * 100 + siblings * 10 + podsOfNode(ks, n.metadata.name).length * 0.1 + used.cpu / cpuMilli(n.status.allocatable.cpu) + used.mem / memBytes(n.status.allocatable.memory) });
     }
     if (!fits.length) {
       const parts = Object.entries(reasons)
@@ -469,6 +503,11 @@ function scheduler(ks: KubeState, now: number): void {
     }
     fits.sort((a, b) => a.score - b.score || (a.node.metadata.name < b.node.metadata.name ? -1 : 1));
     const target = fits[0].node.metadata.name;
+    if (gate.wffc.length) {
+      // WaitForFirstConsumer: pick the node, let the provisioner create the volume there first.
+      for (const pvc of gate.wffc) pvc.metadata.annotations = { ...(pvc.metadata.annotations ?? {}), 'volume.kubernetes.io/selected-node': target };
+      continue;
+    }
     pod.spec.nodeName = target;
     bump(ks, pod);
     emit(ks, now, pod, 'Normal', 'Scheduled', `Successfully assigned ${pod.metadata.namespace}/${pod.metadata.name} to ${target}`, 'default-scheduler');
@@ -574,6 +613,21 @@ function syncMounts(ks: KubeState, pod: KObj, c: J, fs: DirNode): void {
   for (const m of c.volumeMounts ?? []) {
     const v = (pod.spec.volumes ?? []).find((x: J) => x.name === m.name);
     if (!v) continue;
+    if (v.persistentVolumeClaim) {
+      const data = claimData(ks, pod, v.persistentVolumeClaim.claimName);
+      if (!data) continue;
+      const target = normalize(m.mountPath);
+      const parentPath = target.replace(/\/[^/]+$/, '') || '/';
+      const leaf = target.split('/').pop()!;
+      try {
+        if (!vfs.exists(parentPath)) vfs.mkdir(parentPath, { parents: true });
+        const parent = vfs.lookup(parentPath) as DirNode;
+        if (parent.children[leaf] !== data) parent.children[leaf] = data;
+      } catch {
+        /* ignore */
+      }
+      continue;
+    }
     let files: Record<string, string> | null = null;
     if (v.configMap) files = { ...(getObj(ks, 'ConfigMap', pod.metadata.namespace, v.configMap.name)?.data ?? {}) };
     else if (v.secret) {
@@ -646,10 +700,26 @@ function startProcess(host: SimState, _ks: KubeState, pod: KObj, c: J, image: Re
     if (http) return { running: true, listen: [Number(http[1] ?? 8000)], logs: [`Serving HTTP on 0.0.0.0 port ${http[1] ?? 8000} (http://0.0.0.0:${http[1] ?? 8000}/) ...`], staticRoot: '/' };
     const sleepOnly = /^(?:\/bin\/)?sleep (\d+|infinity)$/.exec(joined);
     if (sleepOnly) return { running: true, listen: [], logs: [], exitAt: sleepOnly[1] === 'infinity' ? undefined : now + Number(sleepOnly[1]) * SEC, exitCode: 0 };
-    if (/while true|sleep infinity|tail -f|sleep \d{3,}/.test(joined)) {
-      // Long-running loop: log what it echoes once, keep running.
-      const echoes = [...joined.matchAll(/echo\s+(?:"([^"]*)"|'([^']*)'|([^;&|]+))/g)].map((m) => (m[1] ?? m[2] ?? m[3]).trim());
-      return { running: true, listen: [], logs: echoes.map((e) => e.replace(/\$\(date\)|\$\(date[^)]*\)/g, new Date(now).toUTCString())) };
+    const loop = /while true|sleep infinity|tail -f|sleep \d{3,}/.exec(joined);
+    if (loop) {
+      // Long-running: run the setup before the loop for real (e.g. writing to a volume),
+      // then log what the loop echoes once and keep running.
+      const logs: string[] = [];
+      const isShellC = (full[0] === 'sh' || full[0] === '/bin/sh' || full[0] === 'bash' || full[0] === '/bin/bash') && full[1] === '-c';
+      const scriptText = isShellC ? full.slice(2).join(' ') : '';
+      const at = scriptText.indexOf(loop[0]);
+      const prefix = at > 0 ? scriptText.slice(0, at).replace(/[\s;&]+$/, '') : '';
+      if (prefix) {
+        const shell = podShell(podState(host, pod, c.name, fs, env, image));
+        if (shell) {
+          const r = shell.run(prefix);
+          logs.push(...r.output.map((o) => o.text).join('').split('\n').filter((l) => l !== ''));
+        }
+      }
+      const rest = at > 0 ? scriptText.slice(at) : joined;
+      const echoes = [...rest.matchAll(/echo\s+(?:"([^"]*)"|'([^']*)'|([^;&|]+))/g)].map((m) => (m[1] ?? m[2] ?? m[3]).trim());
+      logs.push(...echoes.map((e) => e.replace(/\$\(date\)|\$\(date[^)]*\)/g, new Date(now).toUTCString())));
+      return { running: true, listen: [], logs };
     }
     // A finite command: run it for real inside the container and keep its output as the log.
     const script = (full[0] === 'sh' || full[0] === '/bin/sh' || full[0] === 'bash' || full[0] === '/bin/bash') && full[1] === '-c' ? full.slice(2).join(' ') : full.map((a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`)).join(' ');
@@ -1100,7 +1170,7 @@ function endpointsController(ks: KubeState, now: number): void {
 function garbageCollect(ks: KubeState, now: number): void {
   const alive = new Set<string>();
   for (const kind of Object.keys(ks.objects)) for (const o of Object.values(ks.objects[kind])) if (!isTerminating(o) || kind === 'Pod') alive.add(o.metadata.uid);
-  for (const kind of ['ReplicaSet', 'Pod']) {
+  for (const kind of ['ReplicaSet', 'Job', 'Pod']) {
     for (const o of listObjs(ks, kind)) {
       const owner = o.metadata.ownerReferences?.find((r) => r.controller);
       if (!owner || owner.kind === 'Node') continue;
@@ -1111,7 +1181,7 @@ function garbageCollect(ks: KubeState, now: number): void {
     }
   }
   // Objects being deleted whose children are gone are removed for good.
-  for (const kind of ['Deployment', 'ReplicaSet', 'DaemonSet', 'Job']) {
+  for (const kind of ['Deployment', 'ReplicaSet', 'DaemonSet', 'Job', 'StatefulSet', 'CronJob']) {
     for (const o of listObjs(ks, kind)) if (isTerminating(o)) removeObj(ks, o);
   }
 }
@@ -1120,10 +1190,16 @@ function garbageCollect(ks: KubeState, now: number): void {
 
 function tick(host: SimState, ks: KubeState, now: number): void {
   garbageCollect(ks, now);
+  serviceAccountController(ks, now);
+  hpaController(ks, now);
+  cronJobController(ks, now);
   deploymentController(ks, now);
   replicaSetController(ks, now);
   daemonSetController(ks, now);
   jobController(ks, now);
+  statefulSetController(ks, now);
+  storageController(ks, now);
+  taintEviction(ks, now);
   scheduler(ks, now);
   for (const pod of listObjs(ks, 'Pod')) {
     if (pod.spec.nodeName) kubeletStep(host, ks, pod, now);
@@ -1192,3 +1268,5 @@ export function advance(state: SimState, ms: number): KubeState {
 }
 
 export { makeDir, infoOf };
+
+setHelpers({ podFromTemplate, deletePod, isPodReady, isTerminating, templateHash, tolerates });

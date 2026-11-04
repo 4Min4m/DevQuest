@@ -1,6 +1,7 @@
 /** Admission: validate manifests (strict fields, required values, types) and apply API-server defaults. */
 import { allocateClusterIP, allocateNodePort, qosClass, templateHash } from './controllers';
-import { getObj, iso, newMeta, nextSeq, uid } from './cluster';
+import { getObj, infoOf, iso, listObjs, newMeta, nextSeq, uid } from './cluster';
+import { parseCron } from './cron';
 import { validQuantity, memBytes, cpuMilli } from './quantity';
 import type { J, KObj, KubeState } from './types';
 
@@ -17,25 +18,29 @@ export const KINDS: Record<string, string> = {
   ReplicaSet: 'apps/v1',
   DaemonSet: 'apps/v1',
   Job: 'batch/v1',
-};
-
-/** Kinds that exist in Kubernetes but come in a later DevOps Quest step. */
-const LATER: Record<string, string> = {
   StatefulSet: 'apps/v1',
   CronJob: 'batch/v1',
-  Ingress: 'networking.k8s.io/v1',
-  NetworkPolicy: 'networking.k8s.io/v1',
   PersistentVolumeClaim: 'v1',
   PersistentVolume: 'v1',
   StorageClass: 'storage.k8s.io/v1',
+  Ingress: 'networking.k8s.io/v1',
+  IngressClass: 'networking.k8s.io/v1',
+  NetworkPolicy: 'networking.k8s.io/v1',
   HorizontalPodAutoscaler: 'autoscaling/v2',
+  ServiceAccount: 'v1',
   Role: 'rbac.authorization.k8s.io/v1',
   RoleBinding: 'rbac.authorization.k8s.io/v1',
   ClusterRole: 'rbac.authorization.k8s.io/v1',
   ClusterRoleBinding: 'rbac.authorization.k8s.io/v1',
-  ServiceAccount: 'v1',
+};
+
+/** Real kinds DevOps Quest doesn't simulate. */
+const LATER: Record<string, string> = {
   ResourceQuota: 'v1',
   LimitRange: 'v1',
+  PodDisruptionBudget: 'policy/v1',
+  VerticalPodAutoscaler: 'autoscaling.k8s.io/v1',
+  CustomResourceDefinition: 'apiextensions.k8s.io/v1',
 };
 
 // ------------------------------------------------------------------ strict field schema
@@ -113,6 +118,41 @@ const SCHEMAS: Record<string, Schema> = {
   ConfigMap: { apiVersion: ANY, kind: ANY, metadata: META, data: ANY, binaryData: ANY, immutable: ANY },
   Secret: { apiVersion: ANY, kind: ANY, metadata: META, data: ANY, stringData: ANY, type: ANY, immutable: ANY },
   Namespace: TOP({ finalizers: ANY }),
+  StatefulSet: TOP({
+    replicas: ANY,
+    selector: SELECTOR,
+    template: TEMPLATE,
+    serviceName: ANY,
+    volumeClaimTemplates: ANY,
+    podManagementPolicy: ANY,
+    updateStrategy: ANY,
+    revisionHistoryLimit: ANY,
+    minReadySeconds: ANY,
+    persistentVolumeClaimRetentionPolicy: ANY,
+    ordinals: ANY,
+  }),
+  CronJob: TOP({
+    schedule: ANY,
+    timeZone: ANY,
+    startingDeadlineSeconds: ANY,
+    concurrencyPolicy: ANY,
+    suspend: ANY,
+    successfulJobsHistoryLimit: ANY,
+    failedJobsHistoryLimit: ANY,
+    jobTemplate: { metadata: META, spec: { template: TEMPLATE, ...Object.fromEntries(['parallelism', 'completions', 'activeDeadlineSeconds', 'backoffLimit', 'ttlSecondsAfterFinished', 'completionMode', 'suspend'].map((k) => [k, ANY])) } },
+  }),
+  PersistentVolumeClaim: TOP({ accessModes: ANY, resources: { requests: ANY, limits: ANY }, storageClassName: ANY, volumeMode: ANY, volumeName: ANY, selector: ANY, dataSource: ANY, dataSourceRef: ANY, volumeAttributesClassName: ANY }),
+  PersistentVolume: TOP(Object.fromEntries(['capacity', 'accessModes', 'persistentVolumeReclaimPolicy', 'storageClassName', 'volumeMode', 'claimRef', 'hostPath', 'local', 'nfs', 'csi', 'nodeAffinity', 'mountOptions'].map((k) => [k, ANY]))),
+  StorageClass: { apiVersion: ANY, kind: ANY, metadata: META, provisioner: ANY, parameters: ANY, reclaimPolicy: ANY, volumeBindingMode: ANY, allowVolumeExpansion: ANY, mountOptions: ANY, allowedTopologies: ANY },
+  Ingress: TOP({ ingressClassName: ANY, defaultBackend: ANY, tls: ANY, rules: [{ host: ANY, http: { paths: [{ path: ANY, pathType: ANY, backend: { service: { name: ANY, port: { number: ANY, name: ANY } }, resource: ANY } }] } }] }),
+  IngressClass: TOP({ controller: ANY, parameters: ANY }),
+  NetworkPolicy: TOP({ podSelector: ANY, policyTypes: ANY, ingress: ANY, egress: ANY }),
+  HorizontalPodAutoscaler: TOP({ scaleTargetRef: ANY, minReplicas: ANY, maxReplicas: ANY, metrics: ANY, behavior: ANY }),
+  ServiceAccount: { apiVersion: ANY, kind: ANY, metadata: META, secrets: ANY, imagePullSecrets: ANY, automountServiceAccountToken: ANY },
+  Role: { apiVersion: ANY, kind: ANY, metadata: META, rules: [{ apiGroups: ANY, resources: ANY, verbs: ANY, resourceNames: ANY, nonResourceURLs: ANY }] },
+  ClusterRole: { apiVersion: ANY, kind: ANY, metadata: META, rules: [{ apiGroups: ANY, resources: ANY, verbs: ANY, resourceNames: ANY, nonResourceURLs: ANY }], aggregationRule: ANY },
+  RoleBinding: { apiVersion: ANY, kind: ANY, metadata: META, subjects: ANY, roleRef: ANY },
+  ClusterRoleBinding: { apiVersion: ANY, kind: ANY, metadata: META, subjects: ANY, roleRef: ANY },
 };
 
 function unknownFields(v: J, schema: Schema | true, path: string, out: string[]): void {
@@ -178,7 +218,7 @@ function goMap(m: Record<string, string>): string {
     .join(', ')}}`;
 }
 
-function validatePodSpec(spec: J, path: string, errs: string[], allowedRestart?: string[]): void {
+function validatePodSpec(spec: J, path: string, errs: string[], allowedRestart?: string[], claimNames: string[] = []): void {
   if (!spec || !Array.isArray(spec.containers) || !spec.containers.length) {
     errs.push(`${path}.containers: Required value`);
     return;
@@ -208,7 +248,7 @@ function validatePodSpec(spec: J, path: string, errs: string[], allowedRestart?:
       errs.push(`${cp}.resources.requests: Invalid value: "${res.requests.cpu}": must be less than or equal to cpu limit of ${res.limits.cpu}`);
     }
     for (const [j, m] of (c.volumeMounts ?? []).entries()) {
-      if (!(spec.volumes ?? []).some((v: J) => v.name === m.name)) errs.push(`${cp}.volumeMounts[${j}].name: Not found: "${m.name}"`);
+      if (!(spec.volumes ?? []).some((v: J) => v.name === m.name) && !claimNames.includes(m.name)) errs.push(`${cp}.volumeMounts[${j}].name: Not found: "${m.name}"`);
       if (!m.mountPath) errs.push(`${cp}.volumeMounts[${j}].mountPath: Required value`);
     }
     for (const pk of ['livenessProbe', 'readinessProbe', 'startupProbe']) {
@@ -252,6 +292,70 @@ function validate(o: J): string[] {
     }
     case 'Job':
       validatePodSpec(o.spec?.template?.spec, 'spec.template.spec', errs, ['OnFailure', 'Never']);
+      break;
+    case 'StatefulSet': {
+      const sel = o.spec?.selector;
+      if (!sel || (!sel.matchLabels && !sel.matchExpressions)) errs.push('spec.selector: Required value');
+      const labels = o.spec?.template?.metadata?.labels ?? {};
+      if (sel && Object.entries(sel.matchLabels ?? {}).some(([k, v]) => labels[k] !== v)) {
+        errs.push(`spec.template.metadata.labels: Invalid value: ${goMap(labels)}: \`selector\` does not match template \`labels\``);
+      }
+      validatePodSpec(o.spec?.template?.spec, 'spec.template.spec', errs, ['Always'], (o.spec?.volumeClaimTemplates ?? []).map((t: J) => t.metadata?.name));
+      for (const [i, t] of (o.spec?.volumeClaimTemplates ?? []).entries()) {
+        if (!t.metadata?.name) errs.push(`spec.volumeClaimTemplates[${i}].metadata.name: Required value`);
+        if (!(t.spec?.accessModes ?? []).length) errs.push(`spec.volumeClaimTemplates[${i}].spec.accessModes: Required value: at least 1 access mode is required`);
+      }
+      break;
+    }
+    case 'CronJob': {
+      const sch = o.spec?.schedule;
+      if (!sch) errs.push('spec.schedule: Required value');
+      else if (!parseCron(sch)) errs.push(`spec.schedule: Invalid value: "${sch}": expected exactly 5 fields, found ${String(sch).trim().split(/\s+/).length}: ${sch}`);
+      validatePodSpec(o.spec?.jobTemplate?.spec?.template?.spec, 'spec.jobTemplate.spec.template.spec', errs, ['OnFailure', 'Never']);
+      break;
+    }
+    case 'PersistentVolumeClaim': {
+      const modes: string[] = o.spec?.accessModes ?? [];
+      if (!modes.length) errs.push('spec.accessModes: Required value: at least 1 access mode is required');
+      for (const m of modes) if (!['ReadWriteOnce', 'ReadOnlyMany', 'ReadWriteMany', 'ReadWriteOncePod'].includes(m)) errs.push(`spec.accessModes: Unsupported value: "${m}": supported values: "ReadOnlyMany", "ReadWriteMany", "ReadWriteOnce", "ReadWriteOncePod"`);
+      const st = o.spec?.resources?.requests?.storage;
+      if (!st) errs.push('spec.resources[storage]: Required value');
+      else if (!validQuantity(st)) errs.push(`spec.resources.requests[storage]: Invalid value: "${st}": quantities must match the regular expression '^([+-]?[0-9.]+)([eEinumkKMGTP]*[-+]?[0-9]*)$'`);
+      break;
+    }
+    case 'Ingress':
+      for (const [i, r] of (o.spec?.rules ?? []).entries()) {
+        for (const [j, path] of (r.http?.paths ?? []).entries()) {
+          const at = `spec.rules[${i}].http.paths[${j}]`;
+          if (!path.pathType) errs.push(`${at}.pathType: Required value: pathType must be specified`);
+          else if (!['Prefix', 'Exact', 'ImplementationSpecific'].includes(path.pathType)) errs.push(`${at}.pathType: Unsupported value: "${path.pathType}": supported values: "Exact", "ImplementationSpecific", "Prefix"`);
+          if (path.path && !String(path.path).startsWith('/')) errs.push(`${at}.path: Invalid value: "${path.path}": must be an absolute path`);
+          if (!path.backend?.service?.name) errs.push(`${at}.backend: Invalid value: "": resource or service backend is required`);
+          else if (path.backend.service.port?.number === undefined && path.backend.service.port?.name === undefined) errs.push(`${at}.backend.service.port: Invalid value: "": port name or number is required`);
+        }
+      }
+      break;
+    case 'HorizontalPodAutoscaler':
+      if (!o.spec?.scaleTargetRef?.name) errs.push('spec.scaleTargetRef.name: Required value');
+      if (!o.spec?.maxReplicas) errs.push('spec.maxReplicas: Invalid value: 0: must be greater than or equal to 1');
+      if (o.spec?.minReplicas !== undefined && o.spec.maxReplicas !== undefined && o.spec.minReplicas > o.spec.maxReplicas) errs.push(`spec.maxReplicas: Invalid value: ${o.spec.maxReplicas}: must be greater than or equal to \`minReplicas\``);
+      break;
+    case 'RoleBinding':
+    case 'ClusterRoleBinding':
+      if (!o.roleRef?.name) errs.push('roleRef.name: Required value');
+      if (o.roleRef?.kind && !['Role', 'ClusterRole'].includes(o.roleRef.kind)) errs.push(`roleRef.kind: Unsupported value: "${o.roleRef.kind}": supported values: "ClusterRole", "Role"`);
+      if (o.kind === 'ClusterRoleBinding' && o.roleRef?.kind === 'Role') errs.push('roleRef.kind: Unsupported value: "Role": supported values: "ClusterRole"');
+      for (const [i, sub] of (o.subjects ?? []).entries()) {
+        if (!['User', 'Group', 'ServiceAccount'].includes(sub.kind)) errs.push(`subjects[${i}].kind: Unsupported value: "${sub.kind}": supported values: "Group", "ServiceAccount", "User"`);
+        if (sub.kind === 'ServiceAccount' && !sub.namespace && o.kind === 'ClusterRoleBinding') errs.push(`subjects[${i}].namespace: Required value`);
+      }
+      break;
+    case 'Role':
+    case 'ClusterRole':
+      for (const [i, r] of (o.rules ?? []).entries()) {
+        if (!(r.verbs ?? []).length) errs.push(`rules[${i}].verbs: Required value: verbs must contain at least one value`);
+        if (!r.nonResourceURLs && !(r.apiGroups ?? []).length) errs.push(`rules[${i}].apiGroups: Required value: resource rules must supply at least one api group`);
+      }
       break;
     case 'Pod':
       validatePodSpec(o.spec, 'spec', errs);
@@ -310,7 +414,7 @@ function sortKeys(v: J): J {
 /** Fill in what the API server would (defaults, ids, cluster IPs). */
 function withDefaults(ks: KubeState, o: J, now: number, existing?: KObj): KObj {
   const kind = o.kind;
-  const namespaced = kind !== 'Namespace';
+  const namespaced = infoOf(kind).namespaced;
   const ns = namespaced ? (o.metadata.namespace ?? ks.namespace) : undefined;
   const meta = existing ? { ...existing.metadata } : newMeta(ks, now, o.metadata.name, ns);
   meta.labels = o.metadata.labels;
@@ -365,6 +469,7 @@ function withDefaults(ks: KubeState, o: J, now: number, existing?: KObj): KObj {
       const ip = existing?.spec.clusterIP ?? o.spec.clusterIP ?? allocateClusterIP(ks, meta.uid);
       spec.clusterIP = ip;
       spec.clusterIPs = [ip];
+      if (ip === 'None') delete spec.ipFamilyPolicy;
       spec.ports = (o.spec.ports ?? []).map((p: J, i: number) => {
         const port: J = { protocol: 'TCP', ...p, targetPort: p.targetPort ?? p.port };
         if (type === 'NodePort' || type === 'LoadBalancer') port.nodePort = p.nodePort ?? existing?.spec.ports?.[i]?.nodePort ?? allocateNodePort(ks, meta.uid + i);
@@ -391,8 +496,79 @@ function withDefaults(ks: KubeState, o: J, now: number, existing?: KObj): KObj {
       out.status = { phase: 'Active' };
       meta.labels = { ...(meta.labels ?? {}), 'kubernetes.io/metadata.name': o.metadata.name };
       break;
+    case 'StatefulSet':
+      out.spec = {
+        replicas: 1,
+        podManagementPolicy: 'OrderedReady',
+        revisionHistoryLimit: 10,
+        persistentVolumeClaimRetentionPolicy: { whenDeleted: 'Retain', whenScaled: 'Retain' },
+        updateStrategy: { type: 'RollingUpdate', rollingUpdate: { partition: 0 } },
+        ...o.spec,
+        template: { metadata: { ...(o.spec.template.metadata ?? {}) }, spec: defaultPodSpec(o.spec.template.spec) },
+      };
+      if (o.spec.volumeClaimTemplates) {
+        out.spec.volumeClaimTemplates = o.spec.volumeClaimTemplates.map((t: J) => ({ apiVersion: 'v1', kind: 'PersistentVolumeClaim', ...t, spec: { volumeMode: 'Filesystem', ...t.spec }, status: { phase: 'Pending' } }));
+      }
+      out.status = existing?.status ?? { replicas: 0 };
+      break;
+    case 'CronJob':
+      out.spec = {
+        concurrencyPolicy: 'Allow',
+        failedJobsHistoryLimit: 1,
+        successfulJobsHistoryLimit: 3,
+        suspend: false,
+        ...o.spec,
+        jobTemplate: { metadata: o.spec.jobTemplate?.metadata ?? {}, spec: { ...o.spec.jobTemplate.spec, template: { metadata: o.spec.jobTemplate.spec.template.metadata ?? {}, spec: defaultPodSpec(o.spec.jobTemplate.spec.template.spec) } } },
+      };
+      out.status = existing?.status ?? {};
+      break;
+    case 'PersistentVolumeClaim': {
+      const dflt = listObjs(ks, 'StorageClass').find((c) => c.metadata.annotations?.['storageclass.kubernetes.io/is-default-class'] === 'true');
+      out.spec = { volumeMode: 'Filesystem', ...o.spec };
+      if (out.spec.storageClassName === undefined && dflt) out.spec.storageClassName = dflt.metadata.name;
+      if (existing?.spec.volumeName) out.spec.volumeName = existing.spec.volumeName;
+      out.status = existing?.status ?? { phase: 'Pending' };
+      break;
+    }
+    case 'PersistentVolume':
+      out.spec = { persistentVolumeReclaimPolicy: 'Retain', volumeMode: 'Filesystem', ...o.spec };
+      out.status = existing?.status ?? { phase: 'Available' };
+      break;
+    case 'StorageClass':
+      for (const k of ['provisioner', 'parameters', 'allowVolumeExpansion', 'mountOptions', 'allowedTopologies']) if (o[k] !== undefined) out[k] = o[k];
+      out.reclaimPolicy = o.reclaimPolicy ?? 'Delete';
+      out.volumeBindingMode = o.volumeBindingMode ?? 'Immediate';
+      break;
+    case 'Ingress':
+      out.spec = o.spec;
+      out.status = existing?.status ?? { loadBalancer: {} };
+      break;
+    case 'HorizontalPodAutoscaler':
+      out.spec = {
+        minReplicas: 1,
+        ...o.spec,
+        metrics: o.spec.metrics ?? [{ type: 'Resource', resource: { name: 'cpu', target: { type: 'Utilization', averageUtilization: 80 } } }],
+      };
+      out.status = existing?.status ?? { currentReplicas: 0, desiredReplicas: 0 };
+      break;
+    case 'NetworkPolicy':
+      out.spec = { podSelector: {}, ...o.spec };
+      out.spec.policyTypes ??= o.spec.egress ? (o.spec.ingress ? ['Ingress', 'Egress'] : ['Ingress', 'Egress']) : ['Ingress'];
+      break;
+    case 'IngressClass':
+      out.spec = o.spec ?? {};
+      break;
+    case 'ServiceAccount':
+    case 'Role':
+    case 'ClusterRole':
+    case 'RoleBinding':
+    case 'ClusterRoleBinding':
+      for (const k of ['secrets', 'imagePullSecrets', 'automountServiceAccountToken', 'rules', 'aggregationRule', 'subjects', 'roleRef']) if (o[k] !== undefined) out[k] = o[k];
+      if (out.roleRef) out.roleRef = { apiGroup: 'rbac.authorization.k8s.io', ...out.roleRef };
+      if (kind === 'Role' || kind === 'ClusterRole') out.rules ??= [];
+      break;
   }
-  if (['Deployment', 'ReplicaSet', 'DaemonSet', 'Job'].includes(kind)) {
+  if (['Deployment', 'ReplicaSet', 'DaemonSet', 'Job', 'StatefulSet', 'CronJob', 'HorizontalPodAutoscaler'].includes(kind)) {
     const changed = !existing || JSON.stringify(sortKeys(existing.spec)) !== JSON.stringify(sortKeys(out.spec));
     meta.generation = existing ? (existing.metadata.generation ?? 1) + (changed ? 1 : 0) : 1;
   }
@@ -440,7 +616,7 @@ export function admit(ks: KubeState, doc: J, now: number, opts: { source: string
   const o = JSON.parse(JSON.stringify(doc));
   o.metadata ??= {};
   const nsWanted = opts.namespace;
-  if (kind !== 'Namespace') {
+  if (infoOf(kind).namespaced) {
     if (o.metadata.namespace && nsWanted && o.metadata.namespace !== nsWanted) {
       throw new AdmissionError(`error: the namespace from the provided object "${o.metadata.namespace}" does not match the namespace "${nsWanted}". You must pass '--namespace=${o.metadata.namespace}' to perform this operation.`);
     }
@@ -456,11 +632,12 @@ export function admit(ks: KubeState, doc: J, now: number, opts: { source: string
   }
   const existing = getObj(ks, kind, o.metadata.namespace, o.metadata.name);
   if (existing && opts.mode === 'create') {
-    throw new AdmissionError(`Error from server (AlreadyExists): error when ${verb} "${opts.source}": ${kind.toLowerCase()}s${kind === 'Deployment' || kind === 'ReplicaSet' || kind === 'DaemonSet' ? '.apps' : kind === 'Job' ? '.batch' : ''} "${o.metadata.name}" already exists`);
+    const r = infoOf(kind);
+    throw new AdmissionError(`Error from server (AlreadyExists): error when ${verb} "${opts.source}": ${r.plural}${r.apiVersion.includes('/') ? '.' + r.apiVersion.split('/')[0] : ''} "${o.metadata.name}" already exists`);
   }
   if (opts.lastApplied) {
     const copy = JSON.parse(JSON.stringify(doc));
-    if (kind !== 'Namespace') copy.metadata = { ...copy.metadata, namespace: o.metadata.namespace };
+    if (infoOf(kind).namespaced) copy.metadata = { ...copy.metadata, namespace: o.metadata.namespace };
     o.metadata.annotations = { ...(o.metadata.annotations ?? {}), 'kubectl.kubernetes.io/last-applied-configuration': JSON.stringify(sortKeys(copy)) + '\n' };
   }
   if (existing) {
@@ -472,8 +649,9 @@ export function admit(ks: KubeState, doc: J, now: number, opts: { source: string
       next.spec.nodeName = existing.spec.nodeName;
       next.status = existing.status;
     }
-    const before = JSON.stringify(sortKeys({ s: existing.spec, l: existing.metadata.labels, a: stripLastApplied(existing.metadata.annotations), d: existing.data }));
-    const after = JSON.stringify(sortKeys({ s: next.spec, l: next.metadata.labels, a: stripLastApplied(next.metadata.annotations), d: next.data }));
+    const top = (x: KObj) => Object.fromEntries(Object.entries(x).filter(([k]) => !['metadata', 'status', 'apiVersion', 'kind'].includes(k)));
+    const before = JSON.stringify(sortKeys({ t: top(existing), l: existing.metadata.labels, a: stripLastApplied(existing.metadata.annotations) }));
+    const after = JSON.stringify(sortKeys({ t: top(next), l: next.metadata.labels, a: stripLastApplied(next.metadata.annotations) }));
     if (before === after) {
       if (next.metadata.annotations?.['kubectl.kubernetes.io/last-applied-configuration']) existing.metadata.annotations = { ...(existing.metadata.annotations ?? {}), 'kubectl.kubernetes.io/last-applied-configuration': next.metadata.annotations['kubectl.kubernetes.io/last-applied-configuration'] };
       return { obj: existing, action: 'unchanged' };
@@ -500,6 +678,22 @@ function immutableChecks(existing: KObj, o: J): void {
   const name = existing.metadata.name;
   if (['Deployment', 'ReplicaSet', 'DaemonSet'].includes(kind) && JSON.stringify(sortKeys(existing.spec.selector)) !== JSON.stringify(sortKeys(o.spec.selector))) {
     throw new AdmissionError(`The ${kind} "${name}" is invalid: spec.selector: Invalid value: v1.LabelSelector{MatchLabels:${goMap(o.spec.selector?.matchLabels ?? {})}, MatchExpressions:[]v1.LabelSelectorRequirement(nil)}: field is immutable`);
+  }
+  if ((kind === 'RoleBinding' || kind === 'ClusterRoleBinding') && JSON.stringify(sortKeys({ apiGroup: 'rbac.authorization.k8s.io', ...o.roleRef })) !== JSON.stringify(sortKeys(existing.roleRef))) {
+    throw new AdmissionError(`The ${kind} "${name}" is invalid: roleRef: Invalid value: rbac.RoleRef{APIGroup:"rbac.authorization.k8s.io", Kind:"${o.roleRef?.kind}", Name:"${o.roleRef?.name}"}: cannot change roleRef`);
+  }
+  if (kind === 'PersistentVolumeClaim') {
+    const strip = (spec: J) => ({ ...spec, resources: undefined, volumeName: undefined, storageClassName: undefined });
+    if (JSON.stringify(sortKeys(strip({ volumeMode: 'Filesystem', ...o.spec }))) !== JSON.stringify(sortKeys(strip(existing.spec))) || (o.spec.storageClassName !== undefined && o.spec.storageClassName !== existing.spec.storageClassName)) {
+      throw new AdmissionError(`The PersistentVolumeClaim "${name}" is invalid: spec: Forbidden: spec is immutable after creation except resources.requests and volumeAttributesClassName for bound claims`);
+    }
+  }
+  if (kind === 'StatefulSet') {
+    const keep = (sp: J) => Object.fromEntries(Object.entries(sp ?? {}).filter(([k]) => !['replicas', 'ordinals', 'template', 'updateStrategy', 'persistentVolumeClaimRetentionPolicy', 'minReadySeconds'].includes(k)));
+    const vct = (sp: J) => (sp.volumeClaimTemplates ?? []).map((t: J) => ({ name: t.metadata?.name, spec: { ...t.spec, volumeMode: t.spec?.volumeMode ?? 'Filesystem' } }));
+    if (JSON.stringify(sortKeys({ ...keep(existing.spec), volumeClaimTemplates: vct(existing.spec), revisionHistoryLimit: undefined, podManagementPolicy: existing.spec.podManagementPolicy })) !== JSON.stringify(sortKeys({ ...keep(o.spec), volumeClaimTemplates: vct(o.spec), revisionHistoryLimit: undefined, podManagementPolicy: o.spec.podManagementPolicy ?? 'OrderedReady' }))) {
+      throw new AdmissionError(`The StatefulSet "${name}" is invalid: spec: Forbidden: updates to statefulset spec for fields other than 'replicas', 'ordinals', 'template', 'updateStrategy', 'persistentVolumeClaimRetentionPolicy' and 'minReadySeconds' are forbidden`);
+    }
   }
   if (kind === 'Service' && o.spec.clusterIP && o.spec.clusterIP !== existing.spec.clusterIP) {
     throw new AdmissionError(`The Service "${name}" is invalid: spec.clusterIPs[0]: Invalid value: []string{"${o.spec.clusterIP}"}: may not change once set`);

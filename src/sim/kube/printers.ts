@@ -4,6 +4,7 @@ import { eventsFor, getObj, infoOf, listObjs, ownedBy, parseIso, qualified } fro
 import { isTerminating, podRequests, templateHash } from './controllers';
 import { cpuMilli, humanDuration, memBytes } from './quantity';
 import type { J, KEvent, KObj, KubeState } from './types';
+import { columns2, describe2 } from './printers2';
 
 // ------------------------------------------------------------------ table layout
 
@@ -172,7 +173,7 @@ export function columns(_ks: KubeState, kind: string, objs: KObj[], now: number,
         }),
       };
   }
-  return { head: ['NAME', 'AGE'], rows: objs.map((o) => ({ obj: o, cells: [o.metadata.name, age(o, now)] })) };
+  return columns2(kind, objs, now, wide);
 }
 
 export function eventsTable(events: KEvent[], now: number, allNs: boolean): string {
@@ -288,18 +289,18 @@ export function rfc1123(ms: number): string {
   return `${DAYS[d.getUTCDay()]}, ${p(d.getUTCDate())} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())} +0000`;
 }
 
-function kv(pairs: [string, string][], indent = '', min = 0): string {
+export function kv(pairs: [string, string][], indent = '', min = 0): string {
   const w = Math.max(min, ...pairs.map(([k]) => k.length + 1));
   return pairs.map(([k, v]) => `${indent}${(k + ':').padEnd(w + 1)}${v}\n`).join('');
 }
 
-function multiline(label: string, map: Record<string, string> | undefined, width: number, indent = ''): string {
+export function multiline(label: string, map: Record<string, string> | undefined, width: number, indent = ''): string {
   const entries = Object.entries(map ?? {}).filter(([k]) => k !== 'kubectl.kubernetes.io/last-applied-configuration');
   if (!entries.length) return `${indent}${(label + ':').padEnd(width)}<none>\n`;
   return entries.map(([k, v], i) => `${indent}${(i === 0 ? label + ':' : '').padEnd(width)}${k}${label === 'Annotations' ? ': ' : '='}${v}\n`).join('');
 }
 
-function eventsSection(ks: KubeState, o: KObj, now: number): string {
+export function eventsSection(ks: KubeState, o: KObj, now: number): string {
   const evs = eventsFor(ks, o);
   if (!evs.length) return 'Events:                   <none>\n'.replace(/ {19}/, ' '.repeat(o.kind === 'Pod' ? 19 : 19));
   const rows = evs.map((e) => [
@@ -560,10 +561,10 @@ export function describe(ks: KubeState, o: KObj, now: number): string {
     case 'Node':
       return describeNode(ks, o, now);
   }
-  return kv([['Name', m.name]]);
+  return describe2(ks, o, now);
 }
 
-function podTemplate(t: J): string {
+export function podTemplate(t: J): string {
   let out = 'Pod Template:\n';
   out += multiline('Labels', t.metadata?.labels, 9, '  ');
   if (t.metadata?.annotations) out += multiline('Annotations', t.metadata.annotations, 9, '  ');
