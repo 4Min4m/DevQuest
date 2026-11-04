@@ -95,4 +95,24 @@ describe('LineEditor', () => {
     ed.feed('\x15echo x | so\t');
     expect(ed.buffer).toBe('echo x | sort ');
   });
+
+  it('redraws lines that wrap onto several rows without leaving copies behind', () => {
+    // 10-column terminal, a coloured 2-character prompt.
+    const ed = new LineEditor({ prompt: () => '\x1b[32m$\x1b[0m ', cols: () => 10 });
+    expect(ed.render(true)).toBe('\r\x1b[J\x1b[32m$\x1b[0m \r\x1b[2C');
+    const writes = (events: EditorEvent[]) => events.map((e) => (e.type === 'write' ? e.data : '')).join('');
+    // 2 + 11 = 13 columns: the input now spans two rows, cursor on row 1, column 3.
+    expect(writes(ed.feed('abcdefghijk'))).toMatch(/\r\x1b\[J\x1b\[32m\$\x1b\[0m abcdefghijk\r\x1b\[3C$/);
+    // The next redraw first moves back up to the prompt row.
+    expect(writes(ed.feed('l'))).toMatch(/^\x1b\[1A\r\x1b\[J/);
+    // Cursor home: back up one row from the end.
+    expect(writes(ed.feed('\x01'))).toMatch(/abcdefghijkl\x1b\[1A\r\x1b\[2C$/);
+    // Exactly at the width: force the wrap so the next row starts clean.
+    const ed2 = new LineEditor({ prompt: () => '$ ', cols: () => 10 });
+    expect(writes(ed2.feed('abcdefgh'))).toMatch(/\r\x1b\[J\$ abcdefgh \r\r$/);
+    // Enter from the middle of a wrapped line first moves below its last row.
+    const ed3 = new LineEditor({ prompt: () => '$ ', cols: () => 10 });
+    ed3.feed('abcdefghijklmnop\x01');
+    expect(writes(ed3.feed('\r'))).toBe('\x1b[1B\r\n');
+  });
 });

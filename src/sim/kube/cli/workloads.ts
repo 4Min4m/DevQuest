@@ -187,7 +187,7 @@ function literalPairs(k: KCtx, f: Flags, decode: boolean): Record<string, string
 export function kubectlCreate(k: KCtx, argv: string[]): number {
   const f = parseFlags('create', argv, {
     bool: ['R', 'recursive', 'save-config'],
-    value: ['f', 'filename', 'o', 'output', 'dry-run', 'image', 'replicas', 'port', 'from-literal', 'from-file', 'from-env-file', 'tcp', 'node-port', 'type', 'schedule', 'restart', ...CREATE_EXTRA_FLAGS],
+    value: ['f', 'filename', 'o', 'output', 'dry-run', 'image', 'replicas', 'port', 'from-literal', 'from-file', 'from-env-file', 'tcp', 'node-port', 'type', 'schedule', 'restart', 'from', ...CREATE_EXTRA_FLAGS],
     alias: { f: 'filename', o: 'output', R: 'recursive', r: 'replicas' },
   });
   if (f.flags['dry-run'] === true) f.flags['dry-run'] = 'client';
@@ -239,6 +239,20 @@ export function kubectlCreate(k: KCtx, argv: string[]): number {
       return dumpOrCreate(k, f, { apiVersion: 'v1', kind: 'Service', metadata: { creationTimestamp: null, labels: { app: a2 }, ...nsMeta(a2) }, spec: { ports, selector: { app: a2 }, type }, status: { loadBalancer: {} } });
     }
     case 'job': {
+      if (a1 && typeof f.flags.from === 'string') {
+        const [kind, src] = f.flags.from.split('/');
+        if (!/^(cronjob|cronjobs|cj)$/.test(kind ?? '') || !src) throw new KubectlError(`error: from must be an existing cronjob: ${f.flags.from}`);
+        const cj = getObj(k.ks, 'CronJob', (f.flags.namespace as string | undefined) ?? k.ks.namespace, src);
+        if (!cj) throw new KubectlError(`error: from must be an existing cronjob: cronjobs.batch "${src}" not found`);
+        const spec = JSON.parse(JSON.stringify(cj.spec.jobTemplate.spec));
+        return dumpOrCreate(k, f, {
+          apiVersion: 'batch/v1',
+          kind: 'Job',
+          metadata: { annotations: { 'cronjob.kubernetes.io/instantiate': 'manual' }, creationTimestamp: null, ...nsMeta(a1), ownerReferences: [{ apiVersion: 'batch/v1', controller: true, kind: 'CronJob', name: cj.metadata.name, uid: cj.metadata.uid }] },
+          spec,
+          status: {},
+        });
+      }
       if (!a1 || !f.flags.image) throw new KubectlError('error: required flag(s) "image" not set');
       const container: J = { image: f.flags.image, name: a1, resources: {} };
       if (f.rest?.length) container.command = f.rest;

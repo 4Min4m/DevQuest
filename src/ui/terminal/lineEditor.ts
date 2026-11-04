@@ -13,7 +13,12 @@ export type EditorEvent =
 export interface LineEditorOptions {
   prompt: () => string;
   complete?: (line: string, cursor: number) => Completion;
+  /** Terminal width; when given, long lines that wrap onto several rows are redrawn correctly. */
+  cols?: () => number;
 }
+
+/** Printable width of text (ANSI escape sequences take no space). */
+const visibleLength = (s: string) => s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').length;
 
 const KEYS: Record<string, string> = {
   '\x1b[A': 'up',
@@ -42,10 +47,45 @@ export class LineEditor {
 
   constructor(private readonly opts: LineEditorOptions) {}
 
-  /** Text that draws the prompt and current buffer from the start of the line. */
-  render(): string {
-    const back = this.buffer.length - this.cursor;
-    return '\r\x1b[2K' + this.opts.prompt() + this.buffer + (back > 0 ? `\x1b[${back}D` : '');
+  /** Row of the cursor inside the (possibly wrapped) input line, as last drawn. */
+  private row = 0;
+
+  /**
+   * Text that draws the prompt and current buffer from the start of the input line.
+   * `fresh`: the cursor is at the start of a new, empty line (after output).
+   */
+  render(fresh = false): string {
+    if (fresh) this.row = 0;
+    const cols = this.opts.cols?.() ?? 0;
+    const prompt = this.opts.prompt();
+    if (!cols) {
+      const back = this.buffer.length - this.cursor;
+      return '\r\x1b[2K' + prompt + this.buffer + (back > 0 ? `\x1b[${back}D` : '');
+    }
+    // Go back to the first row of the input line, clear everything below, redraw, then place the cursor.
+    let out = (this.row > 0 ? `\x1b[${this.row}A` : '') + '\r\x1b[J' + prompt + this.buffer;
+    const end = visibleLength(prompt) + this.buffer.length;
+    const at = visibleLength(prompt) + this.cursor;
+    // At an exact multiple of the width the terminal waits to wrap; force it so rows add up.
+    if (end > 0 && end % cols === 0) out += ' \r';
+    const endRow = Math.floor(end / cols);
+    const row = Math.floor(at / cols);
+    const col = at % cols;
+    out += (endRow > row ? `\x1b[${endRow - row}A` : '') + '\r' + (col ? `\x1b[${col}C` : '');
+    this.row = row;
+    return out;
+  }
+
+  /** Move from the cursor to the line after the input (before printing below it). */
+  private leaveLine(): string {
+    const cols = this.opts.cols?.() ?? 0;
+    let down = '';
+    if (cols) {
+      const endRow = Math.floor((visibleLength(this.opts.prompt()) + this.buffer.length) / cols);
+      if (endRow > this.row) down = `\x1b[${endRow - this.row}B`;
+    }
+    this.row = 0;
+    return down + '\r\n';
   }
 
   /** Process raw input (a keypress or a paste). */
@@ -67,7 +107,7 @@ export class LineEditor {
         case '\n': {
           if (c === '\n' && data[i - 2] === '\r') break; // CRLF paste
           const line = this.buffer;
-          events.push({ type: 'write', data: '\r\n' });
+          events.push({ type: 'write', data: this.leaveLine() });
           if (line.trim() && this.history[this.history.length - 1] !== line) this.history.push(line);
           this.historyPos = this.history.length;
           this.buffer = '';
@@ -84,7 +124,7 @@ export class LineEditor {
           redraw();
           break;
         case '\x03': // Ctrl+C
-          events.push({ type: 'write', data: '^C\r\n' });
+          events.push({ type: 'write', data: '^C' + this.leaveLine() });
           this.buffer = '';
           this.cursor = 0;
           this.historyPos = this.history.length;
@@ -92,6 +132,7 @@ export class LineEditor {
           break;
         case '\x0c': // Ctrl+L
           events.push({ type: 'clear' });
+          this.row = 0;
           redraw();
           break;
         case '\x01':
@@ -189,12 +230,20 @@ export class LineEditor {
 
   private tab(): EditorEvent[] {
     if (!this.opts.complete) return [];
+    const before = { buffer: this.buffer, cursor: this.cursor };
     const r = this.opts.complete(this.buffer, this.cursor);
     this.buffer = r.line;
     this.cursor = r.cursor;
     const events: EditorEvent[] = [];
     if (r.candidates.length) {
-      events.push({ type: 'write', data: '\r\n' + r.candidates.join('  ') + '\r\n' });
+      // Leave the line as it was drawn before completion, then list the candidates.
+      const shown = { buffer: this.buffer, cursor: this.cursor };
+      this.buffer = before.buffer;
+      this.cursor = before.cursor;
+      const leave = this.leaveLine();
+      this.buffer = shown.buffer;
+      this.cursor = shown.cursor;
+      events.push({ type: 'write', data: leave + r.candidates.join('  ') + '\r\n' });
     }
     events.push({ type: 'write', data: this.render() });
     return events;

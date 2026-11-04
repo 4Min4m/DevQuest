@@ -1,0 +1,400 @@
+id: k8s-storage
+title: Storage & stateful apps
+branch: k8s-storage
+prerequisites: [k8s-troubleshooting]
+sources:
+  - 05-Kubernetes/04-Storage
+  - 05-Kubernetes/02-Core-Workloads
+theory: |
+  A container's filesystem dies with the container. For data that must outlive a pod, Kubernetes splits
+  storage into three objects:
+
+  | Object | Who makes it | What it is |
+  |---|---|---|
+  | **PersistentVolumeClaim** (PVC) | you (namespaced) | "I need 1Gi, ReadWriteOnce" |
+  | **PersistentVolume** (PV) | an admin, or a provisioner | the actual disk (cluster-scoped) |
+  | **StorageClass** | the admin | *how* to make PVs on demand (`kubectl get sc`) |
+
+  A pod mounts the **claim**, never the PV directly. When a claim names no class, the **default**
+  StorageClass is used — on this kind cluster that's `standard` (local-path, node-local disks).
+
+  - **Access modes:** `ReadWriteOnce` (one node), `ReadOnlyMany`, `ReadWriteMany` (many nodes — needs
+    network storage like NFS/EFS; local-path can't do it), `ReadWriteOncePod`.
+  - **`volumeBindingMode: WaitForFirstConsumer`:** the PVC stays `Pending` until a pod uses it, so the
+    disk is created on the node the pod lands on. `Pending` alone is not an error — read the events.
+  - **Reclaim policy:** `Delete` removes the disk with the claim; `Retain` keeps it (status `Released`).
+  - A PVC that a pod still uses can't disappear: it sits in `Terminating` (the `pvc-protection` finalizer).
+
+  **StatefulSets** run pods that need an identity: stable names (`db-0`, `db-1`…), started **in order**,
+  a stable DNS name through a **headless Service** (`clusterIP: None`), and one PVC per pod from
+  `volumeClaimTemplates` (`data-db-0`, …). Scaling down removes the highest ordinal first and **keeps its
+  PVC** for when it comes back. `volumeClaimTemplates` can't be changed on a live StatefulSet.
+
+  **CronJobs** create Jobs on a schedule (`"*/5 * * * *"` = every 5 minutes, UTC). `kubectl create job
+  NAME --from=cronjob/X` runs one right now — the usual way to test a CronJob.
+missions:
+  - id: pvc-survives
+    title: Data that survives the pod
+    type: guided
+    prompt: |
+      `k8s/notes.yaml` defines a claim `notes-data` and a Deployment `notes` that mounts it at `/data`.
+
+      1. Apply it and wait for the rollout.
+      2. Write `remember the milk` into `/data/note.txt` **inside the pod**.
+      3. **Delete the pod** — the Deployment makes a new one.
+      4. Prove the note is still there in the new pod.
+    initialState:
+      files:
+        /home/student/k8s/notes.yaml: |
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: notes-data
+          spec:
+            accessModes: [ReadWriteOnce]
+            resources:
+              requests:
+                storage: 1Gi
+          ---
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: notes
+            labels: { app: notes }
+          spec:
+            replicas: 1
+            selector:
+              matchLabels: { app: notes }
+            template:
+              metadata:
+                labels: { app: notes }
+              spec:
+                containers:
+                - name: notes
+                  image: busybox
+                  command: ["sh", "-c", "sleep 3600"]
+                  volumeMounts:
+                  - name: data
+                    mountPath: /data
+                volumes:
+                - name: data
+                  persistentVolumeClaim:
+                    claimName: notes-data
+    hints:
+      - text: "`kubectl apply -f k8s/notes.yaml`, then `kubectl get pvc` — watch it go from Pending to Bound once the pod is scheduled."
+        cost: 5
+      - text: "`kubectl exec deploy/notes -- sh -c \"echo remember the milk > /data/note.txt\"`"
+        cost: 5
+      - text: "`kubectl delete pod -l app=notes`, wait for the new pod, then `kubectl exec deploy/notes -- cat /data/note.txt`."
+        cost: 10
+    validator:
+      checks:
+        - type: kubeResource
+          kind: PersistentVolumeClaim
+          name: notes-data
+          path: status.phase
+          equals: Bound
+        - type: kubeVolumeFile
+          claim: notes-data
+          path: note.txt
+          contains: remember the milk
+        - type: commandUsed
+          command: kubectl
+          argsInclude: [delete]
+          succeeded: true
+        - type: kubeRollout
+          name: notes
+    xp: 50
+    par: 7
+    solution:
+      - kubectl apply -f k8s/notes.yaml
+      - kubectl rollout status deployment/notes
+      - kubectl exec deploy/notes -- sh -c "echo remember the milk > /data/note.txt"
+      - kubectl delete pod -l app=notes
+      - kubectl rollout status deployment/notes
+      - kubectl exec deploy/notes -- cat /data/note.txt
+    explain: |
+      The PVC was `Pending` until the first pod was scheduled (WaitForFirstConsumer), then the provisioner
+      created a PV on that node and bound it. The new pod mounted the **same** volume. Check the plumbing
+      with `kubectl get pvc,pv` — the PV's CLAIM column points back at `default/notes-data`.
+
+  - id: statefulset
+    title: A database with a stable identity
+    type: guided
+    prompt: |
+      `k8s/redis.yaml` has a headless Service and a 3-replica **StatefulSet** `redis` with a
+      `volumeClaimTemplates` entry.
+
+      **Deploy it, then scale it down to 2 replicas.** Look at which pod goes away — and what happens to
+      its claim.
+    initialState:
+      files:
+        /home/student/k8s/redis.yaml: |
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: redis
+          spec:
+            clusterIP: None
+            selector: { app: redis }
+            ports:
+            - port: 6379
+          ---
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: redis
+          spec:
+            serviceName: redis
+            replicas: 3
+            selector:
+              matchLabels: { app: redis }
+            template:
+              metadata:
+                labels: { app: redis }
+              spec:
+                containers:
+                - name: redis
+                  image: redis:7
+                  ports:
+                  - containerPort: 6379
+                  volumeMounts:
+                  - name: data
+                    mountPath: /data
+            volumeClaimTemplates:
+            - metadata:
+                name: data
+              spec:
+                accessModes: [ReadWriteOnce]
+                resources:
+                  requests:
+                    storage: 1Gi
+    hints:
+      - text: "`kubectl apply -f k8s/redis.yaml` and `kubectl get pods -w`-style polling: pods start one at a time, `redis-0` first."
+        cost: 5
+      - text: "`kubectl rollout status statefulset/redis` waits until all 3 are ready."
+        cost: 5
+      - text: "`kubectl scale statefulset redis --replicas=2`, then `kubectl get pods,pvc`."
+        cost: 10
+    validator:
+      checks:
+        - type: kubeResource
+          kind: StatefulSet
+          name: redis
+          path: spec.replicas
+          equals: "2"
+        - type: kubeResource
+          kind: StatefulSet
+          name: redis
+          path: status.readyReplicas
+          equals: "2"
+        - type: kubeResource
+          kind: PersistentVolumeClaim
+          name: data-redis-2
+          path: status.phase
+          equals: Bound
+          message: redis-2's claim should still exist (StatefulSets keep PVCs on scale-down).
+    xp: 50
+    par: 5
+    solution:
+      - kubectl apply -f k8s/redis.yaml
+      - kubectl rollout status statefulset/redis
+      - kubectl scale statefulset redis --replicas=2
+      - kubectl get pods,pvc
+    explain: |
+      The highest ordinal (`redis-2`) went first, and `data-redis-2` stayed `Bound`: scale back to 3 and
+      `redis-2` gets **its own data back**. Each pod is also reachable by name through the headless
+      Service — `redis-0.redis.default.svc.cluster.local` — which is how replicas find their primary.
+
+  - id: cronjob
+    title: Backups on a schedule
+    type: guided
+    prompt: |
+      Create a CronJob **`backup`** (image `busybox`) that runs `echo backup done` **every 5 minutes**.
+
+      Don't wait 5 minutes to find out if it works: **trigger a Job from it right now**, named
+      `backup-manual`, and check its logs.
+    initialState: {}
+    hints:
+      - text: "`kubectl create cronjob backup --image=busybox --schedule=\"*/5 * * * *\" -- echo backup done`"
+        cost: 5
+      - text: "`kubectl create job backup-manual --from=cronjob/backup`"
+        cost: 5
+      - text: "Give it a few seconds, then `kubectl logs job/backup-manual`."
+        cost: 5
+    validator:
+      checks:
+        - type: kubeResource
+          kind: CronJob
+          name: backup
+          path: spec.schedule
+          equals: "*/5 * * * *"
+        - type: kubeResource
+          kind: Job
+          name: backup-manual
+          path: status.succeeded
+          equals: "1"
+    xp: 40
+    par: 5
+    solution:
+      - kubectl create cronjob backup --image=busybox --schedule="*/5 * * * *" -- echo backup done
+      - kubectl create job backup-manual --from=cronjob/backup
+      - sleep 10
+      - kubectl logs job/backup-manual
+    explain: |
+      `--from=cronjob/backup` copies the CronJob's `jobTemplate`, so you test exactly what the schedule will
+      run. `kubectl get cronjob` shows `LAST SCHEDULE`; finished Jobs are kept per
+      `successfulJobsHistoryLimit` (3) and `failedJobsHistoryLimit` (1).
+
+  - id: k8s-storage-check
+    title: "Knowledge check: storage"
+    type: quiz
+    prompt: Claims, classes and stateful workloads.
+    xp: 30
+    questions:
+      - kind: single
+        prompt: A new PVC is `Pending` and its events say `waiting for first consumer to be created before binding`. What now?
+        options:
+          - It's broken — delete and recreate it
+          - Nothing is wrong; it binds once a pod that uses it is scheduled
+          - Create a PersistentVolume by hand
+          - Change the access mode to ReadWriteMany
+        answer: 1
+      - kind: single
+        prompt: Which access mode lets pods on several nodes write the same volume?
+        options: [ReadWriteOnce, ReadOnlyMany, ReadWriteMany, ReadWriteOncePod]
+        answer: 2
+      - kind: single
+        prompt: You scale a StatefulSet `db` from 3 to 1. What happens to `data-db-2`?
+        options:
+          - It's deleted with the pod
+          - It's kept, and reattached to db-2 if you scale back up
+          - It's moved to db-0
+          - It becomes ReadOnlyMany
+        answer: 1
+      - kind: multi
+        prompt: What does a StatefulSet give its pods that a Deployment doesn't?
+        options:
+          - Stable names (db-0, db-1, …)
+          - Ordered start-up and shutdown
+          - A PVC per pod from volumeClaimTemplates
+          - Automatic backups
+        answers: [0, 1, 2]
+      - kind: single
+        prompt: "What does the schedule `0 2 * * *` mean for a CronJob?"
+        options: [Every 2 minutes, At 02:00 every day, On the 2nd of each month, Every 2 hours]
+        answer: 1
+
+  - id: boss-pvc-pending
+    title: "Boss: the database won't start"
+    type: boss
+    prompt: |
+      🚨 The new **`postgres`** StatefulSet in namespace **`prod`** has been `Pending` for an hour.
+      The manifest someone wrote is in `k8s/postgres.yaml`.
+
+      **Get `postgres-0` running with a Bound claim.** This cluster only has the default `standard`
+      StorageClass (node-local disks).
+    initialState:
+      files:
+        /home/student/k8s/postgres.yaml: |
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: postgres
+            namespace: prod
+          spec:
+            serviceName: postgres
+            replicas: 1
+            selector:
+              matchLabels: { app: postgres }
+            template:
+              metadata:
+                labels: { app: postgres }
+              spec:
+                containers:
+                - name: postgres
+                  image: postgres:17
+                  env:
+                  - name: POSTGRES_PASSWORD
+                    value: s3cret
+                  volumeMounts:
+                  - name: data
+                    mountPath: /var/lib/postgresql/data
+            volumeClaimTemplates:
+            - metadata:
+                name: data
+              spec:
+                storageClassName: fast-ssd
+                accessModes: [ReadWriteMany]
+                resources:
+                  requests:
+                    storage: 5Gi
+      kubeManifests: |
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: prod
+        ---
+        apiVersion: apps/v1
+        kind: StatefulSet
+        metadata:
+          name: postgres
+          namespace: prod
+        spec:
+          serviceName: postgres
+          replicas: 1
+          selector:
+            matchLabels: { app: postgres }
+          template:
+            metadata:
+              labels: { app: postgres }
+            spec:
+              containers:
+              - name: postgres
+                image: postgres:17
+                env:
+                - name: POSTGRES_PASSWORD
+                  value: s3cret
+                volumeMounts:
+                - name: data
+                  mountPath: /var/lib/postgresql/data
+          volumeClaimTemplates:
+          - metadata:
+              name: data
+            spec:
+              storageClassName: fast-ssd
+              accessModes: [ReadWriteMany]
+              resources:
+                requests:
+                  storage: 5Gi
+      setupAge: 3600
+    hints: []
+    validator:
+      checks:
+        - type: kubePods
+          selector: app=postgres
+          namespace: prod
+          ready: 1
+        - type: kubeResource
+          kind: PersistentVolumeClaim
+          name: data-postgres-0
+          namespace: prod
+          path: status.phase
+          equals: Bound
+    xp: 200
+    par: 10
+    solution:
+      - kubectl get pods,pvc -n prod
+      - kubectl describe pvc data-postgres-0 -n prod
+      - kubectl get storageclass
+      - "sed -i 's/fast-ssd/standard/; s/ReadWriteMany/ReadWriteOnce/' k8s/postgres.yaml"
+      - kubectl delete statefulset postgres -n prod
+      - kubectl delete pvc data-postgres-0 -n prod
+      - kubectl apply -f k8s/postgres.yaml
+      - kubectl rollout status statefulset/postgres -n prod
+    explain: |
+      Two problems hid behind one `Pending`: the claim asked for a StorageClass that doesn't exist
+      (`ProvisioningFailed: storageclass.storage.k8s.io "fast-ssd" not found`), and for `ReadWriteMany`,
+      which node-local storage can't provide. `volumeClaimTemplates` are immutable, so the StatefulSet had
+      to be **deleted and recreated** — and the old, never-bound claim deleted too, or the new pod would
+      have picked it up again (claims are matched by name: `data-postgres-0`).

@@ -1,5 +1,6 @@
 /** The object store: resource kinds, lookup helpers, ids, events, and the cluster's initial state. */
 import { sha1, utf8 } from '../git/sha1';
+import { NGINX_INDEX } from '../docker/catalog';
 import type { SimState } from '../state';
 import type { AppSpec, J, KEvent, KObj, KubeState, Meta } from './types';
 
@@ -182,6 +183,22 @@ export const K8S_VERSION = 'v1.31.2';
 
 /** Behaviour of the system images the cluster itself runs. */
 export const SYSTEM_IMAGES: Record<string, AppSpec> = {
+  'docker.io/bitnami/nginx:1.27.2-debian-12-r2': {
+    listen: [8080],
+    portEnv: 'NGINX_HTTP_PORT_NUMBER',
+    http: { '/': { body: NGINX_INDEX } },
+    logs: ['nginx 09:00:00.00 INFO  ==> ', 'nginx 09:00:00.00 INFO  ==> Welcome to the Bitnami nginx container', 'nginx 09:00:00.01 INFO  ==> ** Starting NGINX setup **', 'nginx 09:00:00.03 INFO  ==> ** NGINX setup finished! **', 'nginx 09:00:00.04 INFO  ==> ** Starting NGINX **'],
+    memMi: 6,
+    cpuM: 1,
+  },
+  'docker.io/bitnami/nginx:1.27.1-debian-12-r5': {
+    listen: [8080],
+    portEnv: 'NGINX_HTTP_PORT_NUMBER',
+    http: { '/': { body: NGINX_INDEX } },
+    logs: ['nginx 09:00:00.00 INFO  ==> ', 'nginx 09:00:00.00 INFO  ==> Welcome to the Bitnami nginx container', 'nginx 09:00:00.01 INFO  ==> ** Starting NGINX setup **', 'nginx 09:00:00.03 INFO  ==> ** NGINX setup finished! **', 'nginx 09:00:00.04 INFO  ==> ** Starting NGINX **'],
+    memMi: 6,
+    cpuM: 1,
+  },
   'registry.k8s.io/etcd:3.5.15-0': { listen: [2379, 2380], logs: ['{"level":"info","msg":"serving client traffic securely","address":"172.18.0.2:2379"}'], memMi: 60, cpuM: 25 },
   'registry.k8s.io/kube-apiserver:v1.31.2': { listen: [6443], logs: ['I1103 08:59:58.000000       1 controller.go:615] quota admission added evaluator for: deployments.apps'], memMi: 280, cpuM: 45 },
   'registry.k8s.io/kube-controller-manager:v1.31.2': { listen: [10257], logs: ['I1103 08:59:59.000000       1 controllermanager.go:797] "Started controller" controller="deployment-controller"'], memMi: 50, cpuM: 15 },

@@ -42,6 +42,20 @@ browser terminal. No backend, no runtime network calls. See [CLAUDE.md](CLAUDE.m
   delete/edit/expose/scale/set/rollout/label/top/port-forward/config, `-o yaml|json|name|jsonpath|
   custom-columns`, strict manifest validation). Three lessons — Pods & Deployments, Services &
   configuration, Probes & troubleshooting — with 13 missions, 3 knowledge checks and 3 boss fights.
+- **Step 11 done:** Kubernetes part 2. **Storage:** a default `standard` StorageClass (local-path,
+  WaitForFirstConsumer) that provisions PVs pinned to a node, data that outlives pods, `pvc-protection`,
+  StatefulSets (ordered pods, per-pod claims, headless Services) and CronJobs. **Scheduling:**
+  `taint`/`cordon`/`uncordon`/`drain` with kubectl's real refusals, tolerations, node and pod
+  (anti-)affinity, an HPA driven by simulated load (`<unknown>` without requests, 5-minute scale-down
+  stabilization). **Traffic:** ingress-nginx on port 80 (host/path routing, nginx 404/503/504 pages,
+  `curl -H "Host: …"` or `/etc/hosts`) and enforced NetworkPolicies (blocked traffic times out, egress
+  isolation breaks DNS). **RBAC:** Roles/ClusterRoles/bindings, `kubectl auth can-i`/`whoami`, `--as`
+  impersonation and exact Forbidden errors. **Helm:** a Go-template engine with the Sprig functions
+  charts use, `helm create/lint/template/install/upgrade/rollback/uninstall/list/history/get/status`,
+  `--set`/`-f`/`--reuse-values`/`--wait`/`--atomic`, releases stored as Secrets, Helm's ownership
+  checks, and an offline `bitnami` repo. Four lessons — Storage & stateful apps, Scheduling &
+  autoscaling, Ingress & network policies, RBAC & Helm — with 12 missions, 4 knowledge checks and 4
+  boss fights (a Pending database, Black Friday autoscaling, a dark storefront, a Forbidden pipeline).
 
 ### Roadmap (from the knowledge vault)
 
@@ -50,7 +64,7 @@ browser terminal. No backend, no runtime network calls. See [CLAUDE.md](CLAUDE.m
 | ~~8~~ | 03 Linux (rest), 02 Networking tools | ✅ done (see above) |
 | ~~9~~ | 01 Version Control | ✅ done (see above) |
 | ~~10~~ | 05 Kubernetes (1) | ✅ done (see above) |
-| 11 | 05 Kubernetes (2) | storage (PV/PVC/StatefulSet), scheduling (taints, affinity, drain), HPA, Ingress, NetworkPolicy, RBAC, Helm |
+| ~~11~~ | 05 Kubernetes (2) | ✅ done (see above) |
 | 12 | 06 CI/CD, GitOps | Pipeline runner (GitHub Actions / GitLab CI), deployment strategies, ArgoCD-style sync |
 | 13 | 07 Cloud, 08 IaC | Terraform, Ansible, mock AWS |
 | 14 | 09 Observability, 10 Security | PromQL, logs, alerting, DevSecOps + incident boss fights |
@@ -83,8 +97,12 @@ src/sim/netsim/             DNS zone, /etc/hosts resolution, remote hosts; dig, 
 src/sim/systemd/            unit-file parser, service manager (failure modes), systemctl, journalctl
 src/sim/disk.ts             disk usage per mount (bytes + inodes) and the ENOSPC guard
 src/sim/git/                Git: objects (SHA-1), diff/merge3, repo plumbing, ops, cli/ (porcelain)
-src/sim/kube/               Kubernetes: object store, controllers (time-stepped reconcile), images,
-                            manifest admission, printers, net (DNS / NodePort / port-forward), cli/
+src/sim/kube/               Kubernetes: object store, controllers (time-stepped reconcile), extra.ts
+                            (storage, StatefulSets, CronJobs, HPA), images, manifest admission,
+                            printers, net (DNS / NodePort / port-forward / ingress-nginx), netpol,
+                            rbac, cli/
+src/sim/helm/               Helm: Go-template parser + executor, Sprig functions, charts and values,
+                            releases (Secrets), offline repo, the helm CLI
 src/game/                   mission engine: initial-state builder, validators, MissionSession;
                             progress.ts (XP, levels, streak, hearts, unlocking, skill tree),
                             store.ts (Zustand store persisted to localStorage)

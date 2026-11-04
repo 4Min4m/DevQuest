@@ -1,0 +1,580 @@
+id: k8s-ingress-netpol
+title: Ingress & network policies
+branch: k8s-traffic
+prerequisites: [k8s-scheduling]
+sources:
+  - 05-Kubernetes/03-Networking
+  - 05-Kubernetes/09-Security
+theory: |
+  **Ingress** is HTTP routing into the cluster: one entry point, many apps, chosen by **Host** header and
+  **path**. An Ingress object is only a rule — an **ingress controller** (here: ingress-nginx, listening on
+  this machine's port 80) does the work, and only for Ingresses with *its* class:
+  `spec.ingressClassName: nginx` (`kubectl get ingressclass`). Wrong class → no ADDRESS, no routing.
+
+  | `pathType` | `/api` matches |
+  |---|---|
+  | `Exact` | only `/api` |
+  | `Prefix` | `/api`, `/api/`, `/api/orders` (whole path segments — not `/apix`) |
+
+  The longest matching path wins. Test without DNS: `curl -H "Host: shop.local" localhost`, or add
+  `127.0.0.1 shop.local` to `/etc/hosts`. nginx answers **404** when no rule matches, **503** when the
+  backend Service has no ready endpoints, **504** when it can't reach the pods at all.
+
+  **NetworkPolicies** are firewalls for pods (enforced by the CNI). By default every pod can reach every
+  pod. Once **any** policy selects a pod for `Ingress`, only traffic that some policy allows gets in:
+
+  ```yaml
+  spec:
+    podSelector: { matchLabels: { app: db } }   # who this protects ({} = every pod in the namespace)
+    policyTypes: [Ingress]
+    ingress:
+    - from:
+      - podSelector: { matchLabels: { app: api } }            # pods in the same namespace
+      - namespaceSelector:                                     # or whole namespaces
+          matchLabels: { kubernetes.io/metadata.name: ingress-nginx }
+      ports: [{ port: 8080 }]
+  ```
+
+  Blocked traffic isn't refused, it's **dropped** — the client hangs until it times out. Use
+  `curl -m 3` when testing. Policies are additive (allow-lists): there is no "deny" rule, only "not
+  allowed by anything".
+missions:
+  - id: ingress-hosts
+    title: One address, many sites
+    type: guided
+    prompt: |
+      `shop` and `blog` each have a Deployment and a Service on port 80. **Create one Ingress `sites`**
+      (class `nginx`) that sends `shop.local` to `shop` and `blog.local` to `blog`, and test both.
+    initialState:
+      kubeImages:
+        ghcr.io/acme/shop:1.0:
+          listen: [8080]
+          http: { "/": { body: "<h1>Acme Shop</h1>\n" } }
+        ghcr.io/acme/blog:1.0:
+          listen: [8080]
+          http: { "/": { body: "<h1>Acme Blog</h1>\n" } }
+      kubeManifests: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: shop
+          labels: { app: shop }
+        spec:
+          replicas: 1
+          selector:
+            matchLabels: { app: shop }
+          template:
+            metadata:
+              labels: { app: shop }
+            spec:
+              containers:
+              - name: shop
+                image: ghcr.io/acme/shop:1.0
+                ports:
+                - containerPort: 8080
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: shop
+        spec:
+          selector: { app: shop }
+          ports:
+          - port: 80
+            targetPort: 8080
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: blog
+          labels: { app: blog }
+        spec:
+          replicas: 1
+          selector:
+            matchLabels: { app: blog }
+          template:
+            metadata:
+              labels: { app: blog }
+            spec:
+              containers:
+              - name: blog
+                image: ghcr.io/acme/blog:1.0
+                ports:
+                - containerPort: 8080
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: blog
+        spec:
+          selector: { app: blog }
+          ports:
+          - port: 80
+            targetPort: 8080
+    hints:
+      - text: "`kubectl get ingressclass` — the controller's class is `nginx`."
+        cost: 5
+      - text: "`kubectl create ingress sites --class=nginx --rule=\"shop.local/*=shop:80\" --rule=\"blog.local/*=blog:80\"` (`/*` = Prefix `/`)."
+        cost: 10
+      - text: "`curl -s -H \"Host: shop.local\" localhost`"
+        cost: 5
+    validator:
+      checks:
+        - type: kubeIngress
+          host: shop.local
+          contains: Acme Shop
+        - type: kubeIngress
+          host: blog.local
+          contains: Acme Blog
+    xp: 50
+    par: 5
+    solution:
+      - kubectl get ingressclass
+      - kubectl create ingress sites --class=nginx --rule="shop.local/*=shop:80" --rule="blog.local/*=blog:80"
+      - 'curl -s -H "Host: shop.local" localhost'
+      - 'curl -s -H "Host: blog.local" localhost'
+    explain: |
+      Both names point at the same IP and port; nginx picks the backend from the **Host** header. That's
+      name-based virtual hosting, and it's why one load balancer can front dozens of apps. `kubectl get
+      ingress` shows the ADDRESS the controller published (`localhost` on kind).
+
+  - id: ingress-paths
+    title: "/api goes to the API"
+    type: guided
+    prompt: |
+      On `shop.local`, `/` should go to `web` and everything under **`/api`** to `api`.
+      `k8s/shop-ingress.yaml` is almost right.
+
+      **Make `curl http://shop.local/api/orders` (no `-H` tricks — set up the name on this machine)
+      return the orders JSON.**
+    initialState:
+      kubeImages:
+        ghcr.io/acme/orders-api:1.0:
+          listen: [8080]
+          http:
+            /api/orders: { body: "{\"orders\":[{\"id\":1042,\"total\":59.9}]}\n" }
+            /api/health: { body: "ok\n" }
+      kubeManifests: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: web
+          labels: { app: web }
+        spec:
+          replicas: 1
+          selector:
+            matchLabels: { app: web }
+          template:
+            metadata:
+              labels: { app: web }
+            spec:
+              containers:
+              - name: web
+                image: nginx:1.27
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: web
+        spec:
+          selector: { app: web }
+          ports:
+          - port: 80
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: api
+          labels: { app: api }
+        spec:
+          replicas: 1
+          selector:
+            matchLabels: { app: api }
+          template:
+            metadata:
+              labels: { app: api }
+            spec:
+              containers:
+              - name: api
+                image: ghcr.io/acme/orders-api:1.0
+                ports:
+                - containerPort: 8080
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: api
+        spec:
+          selector: { app: api }
+          ports:
+          - port: 80
+            targetPort: 8080
+      files:
+        /home/student/k8s/shop-ingress.yaml: |
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: shop
+          spec:
+            ingressClassName: nginx
+            rules:
+            - host: shop.local
+              http:
+                paths:
+                - path: /api
+                  pathType: Exact
+                  backend:
+                    service:
+                      name: api
+                      port:
+                        number: 80
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: web
+                      port:
+                        number: 80
+    hints:
+      - text: "`curl http://shop.local/...` needs the name to resolve: `echo \"127.0.0.1 shop.local\" | sudo tee -a /etc/hosts`."
+        cost: 5
+      - text: "A 404 from nginx/1.27 means the request reached `web`, not `api`. Which rule matched `/api/orders`?"
+        cost: 5
+      - text: "`pathType: Exact` only matches `/api` itself. Change it to `Prefix` (`sed -i 's/pathType: Exact/pathType: Prefix/' k8s/shop-ingress.yaml`) and apply again."
+        cost: 10
+    validator:
+      checks:
+        - type: fileContains
+          path: /etc/hosts
+          regex: '127\.0\.0\.1\s+.*shop\.local'
+        - type: httpResponds
+          url: http://shop.local/api/orders
+          contains: '"orders"'
+    xp: 60
+    par: 7
+    solution:
+      - kubectl apply -f k8s/shop-ingress.yaml
+      - echo "127.0.0.1 shop.local" | sudo tee -a /etc/hosts
+      - curl -s http://shop.local/api/orders
+      - "sed -i 's/pathType: Exact/pathType: Prefix/' k8s/shop-ingress.yaml"
+      - kubectl apply -f k8s/shop-ingress.yaml
+      - curl -s http://shop.local/api/orders
+    explain: |
+      With `Exact`, `/api/orders` didn't match `/api`, so the catch-all `/` sent it to `web`, which had no
+      such page. `Prefix` matches by path **segments**, and the longest match wins, so `/api/...` goes to
+      the API while everything else still reaches `web`.
+
+  - id: netpol-db
+    title: Only the API may talk to the database
+    type: guided
+    prompt: |
+      Security review: **only `api` pods may reach the `db` Service**; the `debug` pod (and anything else)
+      must be blocked. `k8s/db-policy.yaml` was written for this — apply it, test it from the `api`
+      pod, and fix it if it doesn't work.
+    initialState:
+      kubeImages:
+        ghcr.io/acme/inventory-db:1.4:
+          listen: [8080]
+          http: { "/": { body: "db ok: 12873 rows\n" } }
+      kubeManifests: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: db
+          labels: { app: db }
+        spec:
+          replicas: 1
+          selector:
+            matchLabels: { app: db }
+          template:
+            metadata:
+              labels: { app: db }
+            spec:
+              containers:
+              - name: db
+                image: ghcr.io/acme/inventory-db:1.4
+                ports:
+                - containerPort: 8080
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: db
+        spec:
+          selector: { app: db }
+          ports:
+          - port: 80
+            targetPort: 8080
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: api
+          labels: { app: api }
+        spec:
+          replicas: 1
+          selector:
+            matchLabels: { app: api }
+          template:
+            metadata:
+              labels: { app: api, tier: backend }
+            spec:
+              containers:
+              - name: api
+                image: curlimages/curl
+                command: ["sh", "-c", "sleep 3600"]
+        ---
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: debug
+          labels: { app: debug }
+        spec:
+          containers:
+          - name: debug
+            image: curlimages/curl
+            command: ["sh", "-c", "sleep 3600"]
+      files:
+        /home/student/k8s/db-policy.yaml: |
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: db-allow-api
+          spec:
+            podSelector:
+              matchLabels:
+                app: db
+            policyTypes: [Ingress]
+            ingress:
+            - from:
+              - podSelector:
+                  matchLabels:
+                    role: api
+              ports:
+              - port: 8080
+    hints:
+      - text: "Test from inside: `kubectl exec deploy/api -- curl -s -m 3 http://db` (a blocked request times out — exit code 28)."
+        cost: 5
+      - text: "`kubectl get pods --show-labels` — does any pod carry the label the policy's `from` asks for?"
+        cost: 5
+      - text: "The api pods are `app=api`, not `role=api`: `sed -i 's/role: api/app: api/' k8s/db-policy.yaml`, apply again."
+        cost: 10
+    validator:
+      checks:
+        - type: kubeResource
+          kind: NetworkPolicy
+          name: db-allow-api
+        - type: kubeHttp
+          service: db
+          fromSelector: app=api
+          contains: db ok
+        - type: kubeHttp
+          service: db
+          fromSelector: app=debug
+          blocked: true
+    xp: 60
+    par: 7
+    solution:
+      - kubectl apply -f k8s/db-policy.yaml
+      - kubectl exec deploy/api -- curl -s -m 3 http://db || true
+      - kubectl get pods --show-labels
+      - "sed -i 's/role: api/app: api/' k8s/db-policy.yaml"
+      - kubectl apply -f k8s/db-policy.yaml
+      - kubectl exec deploy/api -- curl -s -m 3 http://db
+      - kubectl exec debug -- curl -s -m 3 http://db || true
+    explain: |
+      As soon as a policy selected the `db` pods they were **isolated**: only what a rule allows gets in.
+      The rule's selector matched nothing, so *everything* was blocked — a classic first-policy outage.
+      Note the port: policies see the **pod's** port (8080), not the Service port (80).
+
+  - id: k8s-traffic-check
+    title: "Knowledge check: ingress & policies"
+    type: quiz
+    prompt: Routing and firewalls.
+    xp: 30
+    questions:
+      - kind: single
+        prompt: You created an Ingress but `kubectl get ingress` shows no ADDRESS and requests get the default 404. Most likely?
+        options:
+          - The Service has no endpoints
+          - No controller handles its ingressClassName
+          - The pathType is Prefix
+          - DNS is down
+        answer: 1
+      - kind: single
+        prompt: "`path: /api` with `pathType: Prefix` matches which of these?"
+        options: [only /api, /api and /api/orders, /api and /apix, everything]
+        answer: 1
+      - kind: single
+        prompt: nginx in front of your app returns 503 Service Temporarily Unavailable. What does that tell you?
+        options:
+          - No Ingress rule matched
+          - The backend Service exists but has no ready endpoints
+          - The certificate expired
+          - A NetworkPolicy dropped the request
+        answer: 1
+      - kind: single
+        prompt: A namespace has no NetworkPolicies. What can reach its pods?
+        options: [Nothing, Only pods in the same namespace, Everything, Only the ingress controller]
+        answer: 2
+      - kind: single
+        prompt: Which label do namespaces get automatically, for use in namespaceSelector?
+        options: [name, kubernetes.io/metadata.name, namespace, app.kubernetes.io/namespace]
+        answer: 1
+
+  - id: boss-store-504
+    title: "Boss: the storefront is dark"
+    type: boss
+    prompt: |
+      🚨 **http://store.local is down** (it's already in `/etc/hosts`). Everything lives in namespace
+      **`store`**. Yesterday the platform team "hardened" the namespace and someone "tidied up" the
+      Ingress; their files are in `k8s/`.
+
+      **Make `http://store.local` serve the storefront through the ingress controller.** The
+      `default-deny` policy stays — let only the ingress controller in.
+    initialState:
+      kubeImages:
+        ghcr.io/acme/storefront:2.4:
+          listen: [8080]
+          http: { "/": { body: "<h1>Acme storefront</h1>\n" } }
+      kubeManifests: |
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: store
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: frontend
+          namespace: store
+          labels: { app: frontend }
+        spec:
+          replicas: 2
+          selector:
+            matchLabels: { app: frontend }
+          template:
+            metadata:
+              labels: { app: frontend }
+            spec:
+              containers:
+              - name: frontend
+                image: ghcr.io/acme/storefront:2.4
+                ports:
+                - containerPort: 8080
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: frontend
+          namespace: store
+        spec:
+          selector: { app: frontend }
+          ports:
+          - port: 80
+            targetPort: 8080
+        ---
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: store
+          namespace: store
+        spec:
+          ingressClassName: nginx-public
+          rules:
+          - host: store.local
+            http:
+              paths:
+              - path: /
+                pathType: Prefix
+                backend:
+                  service:
+                    name: frontend
+                    port:
+                      number: 80
+        ---
+        apiVersion: networking.k8s.io/v1
+        kind: NetworkPolicy
+        metadata:
+          name: default-deny
+          namespace: store
+        spec:
+          podSelector: {}
+          policyTypes: [Ingress]
+      files:
+        /etc/hosts: |
+          127.0.0.1	localhost
+          ::1	localhost ip6-localhost ip6-loopback
+          127.0.0.1	store.local
+        /home/student/k8s/store-ingress.yaml: |
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: store
+            namespace: store
+          spec:
+            ingressClassName: nginx-public
+            rules:
+            - host: store.local
+              http:
+                paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: frontend
+                      port:
+                        number: 80
+        /home/student/k8s/allow-from-ingress.yaml: |
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: allow-from-ingress
+            namespace: store
+          spec:
+            podSelector:
+              matchLabels:
+                app: frontend
+            policyTypes: [Ingress]
+            ingress:
+            - from:
+              - namespaceSelector:
+                  matchLabels:
+                    name: ingress-nginx
+              ports:
+              - port: 8080
+      setupAge: 900
+    hints: []
+    validator:
+      checks:
+        - type: kubeIngress
+          host: store.local
+          contains: Acme storefront
+        - type: httpResponds
+          url: http://store.local
+          contains: Acme storefront
+      guards:
+        - type: kubeResource
+          kind: NetworkPolicy
+          name: default-deny
+          namespace: store
+          message: The default-deny policy must stay in place.
+    xp: 200
+    par: 13
+    solution:
+      - curl -s http://store.local
+      - kubectl get ingress -n store
+      - kubectl get ingressclass
+      - "sed -i 's/nginx-public/nginx/' k8s/store-ingress.yaml"
+      - kubectl apply -f k8s/store-ingress.yaml
+      - curl -s http://store.local
+      - kubectl get networkpolicy -n store
+      - kubectl get namespace ingress-nginx --show-labels
+      - "sed -i 's#name: ingress-nginx#kubernetes.io/metadata.name: ingress-nginx#' k8s/allow-from-ingress.yaml"
+      - kubectl apply -f k8s/allow-from-ingress.yaml
+      - curl -s http://store.local
+    explain: |
+      Two layers: the Ingress named a class nobody serves (`nginx-public`), so the controller ignored it —
+      default 404, no ADDRESS. Once routed, nginx got **504 Gateway Time-out**: `default-deny` isolates
+      every pod in `store`, and the allow rule selected namespaces labelled `name=ingress-nginx`, a label
+      no namespace has. Every namespace automatically gets `kubernetes.io/metadata.name=<name>` — use that.

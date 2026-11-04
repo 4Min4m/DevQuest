@@ -66,9 +66,10 @@ export function TerminalPane({ shell, banner, execute, onCommand, onFileSaved }:
     const editor = new LineEditor({
       prompt: () => promptFor(shell),
       complete: (line, cursor) => shell.complete(line, cursor),
+      cols: () => term.cols,
     });
     if (banner) term.write(toTerminal(banner));
-    term.write(editor.render());
+    term.write(editor.render(true));
     live.current = { term, editor };
 
     const sub = term.onData((data) => {
@@ -87,7 +88,7 @@ export function TerminalPane({ shell, banner, execute, onCommand, onFileSaved }:
           const extra = callbacks.current.onCommand?.(ev.line, result);
           if (extra) term.write(toTerminal(extra));
           if (result.edit) setEdit(result.edit);
-          term.write(editor.render());
+          term.write(editor.render(true));
         }
       }
     });
@@ -113,7 +114,7 @@ export function TerminalPane({ shell, banner, execute, onCommand, onFileSaved }:
           onSaved={() => {
             const extra = callbacks.current.onFileSaved?.();
             const l = live.current;
-            if (extra && l) l.term.write('\r\x1b[2K' + toTerminal(extra) + l.editor.render());
+            if (extra && l) l.term.write('\r\x1b[J' + toTerminal(extra) + l.editor.render(true));
           }}
           onClose={() => {
             setEdit(null);

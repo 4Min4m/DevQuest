@@ -34,6 +34,10 @@ export type BranchId =
   | 'kubernetes'
   | 'k8s-networking'
   | 'k8s-troubleshooting'
+  | 'k8s-storage'
+  | 'k8s-scheduling'
+  | 'k8s-traffic'
+  | 'k8s-rbac-helm'
   | 'cicd'
   | 'cloud-iac'
   | 'observability'
@@ -184,12 +188,32 @@ export type Check = CheckBase &
     /** An object exists (or not); `path` (dotted, e.g. spec.replicas) compared to `equals` / `regex`. */
     | { type: 'kubeResource'; kind: string; name: string; namespace?: string; exists?: boolean; path?: string; equals?: string; regex?: string }
     /** Pods matching a label selector ("app=web"): at least `ready` Ready, all Ready, a STATUS, no crash loop. */
-    | { type: 'kubePods'; selector: string; namespace?: string; ready?: number; allReady?: boolean; status?: string; maxRestarts?: number }
+    | { type: 'kubePods'; selector: string; namespace?: string; ready?: number; allReady?: boolean; status?: string; maxRestarts?: number; node?: string; notNode?: string }
     /** A Deployment is fully rolled out (all replicas updated and available), optionally with this image. */
     | { type: 'kubeRollout'; name: string; namespace?: string; image?: string; replicas?: number }
     | { type: 'kubeEndpoints'; service: string; namespace?: string; min?: number }
     /** A request through a Service (as from another pod) succeeds. */
-    | { type: 'kubeHttp'; service: string; namespace?: string; port?: number; path?: string; contains?: string }
+    | {
+        type: 'kubeHttp';
+        service: string;
+        namespace?: string;
+        port?: number;
+        path?: string;
+        contains?: string;
+        /** Send it from a pod matching this label selector (NetworkPolicies apply). */
+        fromSelector?: string;
+        fromNamespace?: string;
+        /** Expect the request to fail (e.g. blocked by a NetworkPolicy). */
+        blocked?: boolean;
+      }
+    /** A request through the ingress-nginx controller for this Host (and path) returns `status` (default: < 400) / contains text. */
+    | { type: 'kubeIngress'; host: string; path?: string; status?: number; contains?: string }
+    /** A file inside the volume bound to a PersistentVolumeClaim (data that outlives pods). */
+    | { type: 'kubeVolumeFile'; claim: string; namespace?: string; path: string; contains?: string }
+    /** RBAC: `kubectl auth can-i VERB RESOURCE --as AS [-n NS]` answers `allowed`. */
+    | { type: 'kubeCanI'; as: string; verb: string; resource: string; namespace?: string; allowed: boolean }
+    /** A Helm release: its latest revision's status (default deployed), revision, chart version, or a computed value. */
+    | { type: 'helmRelease'; name: string; namespace?: string; status?: string; minRevision?: number; chartVersion?: string; path?: string; equals?: string; exists?: boolean }
   );
 
 export type CheckType = Check['type'];
@@ -247,6 +271,8 @@ export interface InitialStateSpec {
   kubeImages?: Record<string, AppSpec>;
   /** YAML applied to the cluster before setup (hidden from the learner). */
   kubeManifests?: string;
+  /** Extra CPU demand (millicores) on workloads, "namespace/deployment" → m (traffic for HPA missions). */
+  kubeLoad?: Record<string, number>;
   /** Simulated seconds that pass after setup (so containers look "Up 5 minutes"). Default 300. */
   setupAge?: number;
 }

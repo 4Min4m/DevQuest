@@ -1,0 +1,362 @@
+id: k8s-rbac-helm
+title: RBAC & Helm
+branch: k8s-rbac-helm
+prerequisites: [k8s-ingress-netpol]
+sources:
+  - 05-Kubernetes/09-Security
+  - 05-Kubernetes/08-Helm
+theory: |
+  **RBAC** answers "may *this identity* do *this verb* on *this resource*?" — and the answer is **no**
+  unless a binding says yes.
+
+  | Object | Scope | Says |
+  |---|---|---|
+  | `Role` | one namespace | verbs on resources (`get list watch create update patch delete`) |
+  | `ClusterRole` | cluster | the same, usable anywhere (built-ins: `view`, `edit`, `admin`, `cluster-admin`) |
+  | `RoleBinding` | one namespace | give a Role *or ClusterRole* to subjects **in this namespace** |
+  | `ClusterRoleBinding` | cluster | give a ClusterRole everywhere — use sparingly |
+
+  Subjects are `User`, `Group` or `ServiceAccount` (the identity of pods and CI jobs:
+  `system:serviceaccount:<namespace>:<name>`). A binding's `roleRef` **can't be changed** — delete and
+  recreate it.
+
+  ```
+  kubectl create role pod-reader --verb=get,list,watch --resource=pods -n dev
+  kubectl create rolebinding jane-read --role=pod-reader --user=jane -n dev
+  kubectl auth can-i delete pods -n dev --as=jane        # → no
+  ```
+
+  `--as` impersonates someone, so you can test permissions without their credentials.
+
+  **Helm** packages Kubernetes YAML as **charts**: Go templates (`templates/*.yaml`) + defaults
+  (`values.yaml`). Installing a chart creates a **release** with numbered **revisions** (stored as Secrets
+  in the namespace):
+
+  | Command | Does |
+  |---|---|
+  | `helm install NAME CHART [--set k=v] [-f values.yaml]` | revision 1 |
+  | `helm upgrade NAME CHART …` (`--install` to create if missing) | revision N+1 — values not passed are reset to the chart defaults unless `--reuse-values` |
+  | `helm history NAME` · `helm get values NAME` | what changed, and with which values |
+  | `helm rollback NAME REV` | a **new** revision with REV's manifest |
+  | `helm template` / `helm lint` | render / check locally without touching the cluster |
+
+  CHART is a directory (`./mychart`, made with `helm create`) or `repo/name` after `helm repo add`.
+missions:
+  - id: rbac-reader
+    title: Read-only access for a teammate
+    type: guided
+    prompt: |
+      Jane joins the team. **Let user `jane` view (get/list/watch) pods in the `dev` namespace — and
+      nothing else.** Verify it with impersonation.
+    initialState:
+      kubeManifests: |
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: dev
+        ---
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: api
+          namespace: dev
+          labels: { app: api }
+        spec:
+          containers:
+          - name: api
+            image: nginx:1.27
+    hints:
+      - text: "`kubectl create role pod-reader --verb=get,list,watch --resource=pods -n dev`"
+        cost: 5
+      - text: "`kubectl create rolebinding jane-pod-reader --role=pod-reader --user=jane -n dev`"
+        cost: 5
+      - text: "`kubectl auth can-i list pods -n dev --as=jane` should say yes; `delete` should say no."
+        cost: 5
+    validator:
+      checks:
+        - type: kubeCanI
+          as: jane
+          verb: list
+          resource: pods
+          namespace: dev
+          allowed: true
+        - type: kubeCanI
+          as: jane
+          verb: delete
+          resource: pods
+          namespace: dev
+          allowed: false
+        - type: kubeCanI
+          as: jane
+          verb: list
+          resource: pods
+          namespace: default
+          allowed: false
+          message: Jane should only see pods in dev, not in default.
+    xp: 50
+    par: 5
+    solution:
+      - kubectl create role pod-reader --verb=get,list,watch --resource=pods -n dev
+      - kubectl create rolebinding jane-pod-reader --role=pod-reader --user=jane -n dev
+      - kubectl auth can-i list pods -n dev --as=jane
+      - kubectl auth can-i delete pods -n dev --as=jane || true
+      - kubectl get pods -n dev --as=jane
+    explain: |
+      A **Role + RoleBinding** pair is namespaced, so the grant ends at `dev`'s border. Try
+      `kubectl get pods -n default --as=jane` to see the `Forbidden` error she would get. For a
+      ready-made read-only set, bind the built-in ClusterRole `view` with a RoleBinding instead.
+
+  - id: helm-install
+    title: Your first chart from a repo
+    type: guided
+    prompt: |
+      Install **bitnami/nginx version `18.1.0`** as release **`web`** in a new namespace **`web`**, with
+      `service.type=ClusterIP` (the chart defaults to LoadBalancer). Then **upgrade** it to the newest
+      chart version — keeping your setting.
+    initialState: {}
+    hints:
+      - text: "`helm repo add bitnami https://charts.bitnami.com/bitnami`, then `helm search repo nginx --versions`."
+        cost: 5
+      - text: "`helm install web bitnami/nginx --version 18.1.0 -n web --create-namespace --set service.type=ClusterIP`"
+        cost: 10
+      - text: "`helm upgrade web bitnami/nginx -n web --reuse-values` — without `--reuse-values` (or `--set` again) the service type would go back to LoadBalancer."
+        cost: 5
+    validator:
+      checks:
+        - type: helmRelease
+          name: web
+          namespace: web
+          chartVersion: 18.2.4
+          minRevision: 2
+        - type: helmRelease
+          name: web
+          namespace: web
+          path: service.type
+          equals: ClusterIP
+          message: The upgraded release should still use service.type=ClusterIP.
+        - type: kubeRollout
+          name: web-nginx
+          namespace: web
+    xp: 60
+    par: 6
+    solution:
+      - helm repo add bitnami https://charts.bitnami.com/bitnami
+      - helm search repo nginx --versions
+      - helm install web bitnami/nginx --version 18.1.0 -n web --create-namespace --set service.type=ClusterIP
+      - helm upgrade web bitnami/nginx -n web --reuse-values
+      - kubectl rollout status deployment/web-nginx -n web
+    explain: |
+      `helm upgrade` renders the chart again with *only* the values you pass now — `--reuse-values` merges
+      in the previous revision's values. In real pipelines teams keep values in a file and always pass
+      `-f values-prod.yaml`, so every upgrade is reproducible. `helm get values web -n web` shows what's
+      in effect.
+
+  - id: helm-rollback
+    title: A bad upgrade
+    type: guided
+    prompt: |
+      Someone upgraded the **`shop`** release and now new pods won't start. **Find out what changed and
+      roll back to the last good revision.** The chart is in `charts/shop`.
+    initialState:
+      setup:
+        - helm create charts/shop
+        - helm install shop ./charts/shop --set replicaCount=2
+        - kubectl rollout status deployment/shop
+        - helm upgrade shop ./charts/shop --set replicaCount=2 --set image.tag=1.16.9
+      setupAge: 600
+    hints:
+      - text: "`kubectl get pods` — the old pods still serve, the new one can't pull its image. `helm history shop` lists the revisions."
+        cost: 5
+      - text: "`helm get values shop --revision 2` vs `--revision 1`: someone set `image.tag` to a tag that doesn't exist."
+        cost: 5
+      - text: "`helm rollback shop 1`, then `kubectl rollout status deployment/shop`."
+        cost: 10
+    validator:
+      checks:
+        - type: helmRelease
+          name: shop
+          minRevision: 3
+        - type: kubeRollout
+          name: shop
+          image: nginx:1.16.0
+          replicas: 2
+    xp: 60
+    par: 7
+    solution:
+      - kubectl get pods
+      - helm history shop
+      - helm get values shop --revision 2
+      - helm rollback shop 1
+      - kubectl rollout status deployment/shop
+      - helm history shop
+    explain: |
+      The rollback created **revision 3** with revision 1's manifest — history is never rewritten, so you
+      can see exactly what happened. The bad upgrade itself was "successful" for Helm: without `--wait`
+      (or `--atomic`, which rolls back automatically) Helm only checks that the API accepted the objects,
+      not that the pods came up.
+
+  - id: k8s-rbac-helm-check
+    title: "Knowledge check: RBAC & Helm"
+    type: quiz
+    prompt: Permissions and packages.
+    xp: 30
+    questions:
+      - kind: single
+        prompt: You bind the ClusterRole `edit` with a **RoleBinding** in namespace `apps`. Where does the subject get edit rights?
+        options: [Everywhere, Only in apps, Nowhere — ClusterRoles need ClusterRoleBindings, In apps and kube-system]
+        answer: 1
+      - kind: single
+        prompt: A RoleBinding points at the wrong Role. How do you fix it?
+        options:
+          - kubectl edit the roleRef
+          - Delete the binding and create it again with the right roleRef
+          - kubectl patch the Role
+          - It can't be fixed; the namespace must be recreated
+        answer: 1
+      - kind: single
+        prompt: What is a pod's identity when it calls the Kubernetes API?
+        options: [The node's user, Its ServiceAccount, The image's USER, The namespace]
+        answer: 1
+      - kind: single
+        prompt: "`helm upgrade app ./chart` without `--reuse-values` or `-f`. Your earlier `--set replicas=5`…"
+        options: [is kept, is reset to the chart's default, makes the upgrade fail, is stored as a Secret only]
+        answer: 1
+      - kind: single
+        prompt: After `helm rollback app 1` from revision 4, what is the current revision number?
+        options: ["1", "4", "5", "0"]
+        answer: 2
+
+  - id: boss-ci-forbidden
+    title: "Boss: the pipeline is Forbidden"
+    type: boss
+    prompt: |
+      🚨 Every deploy since this morning fails. The CI job runs as ServiceAccount **`deployer`** in
+      namespace **`ci`** and deploys to namespace **`apps`**. Its last log is in `ci/deploy.log`, the
+      manifest it applies is `ci/web.yaml`.
+
+      **Give the CI account exactly what it needs — edit rights in `apps`, nothing cluster-wide — then
+      run the deploy step yourself as that account** (`--as=system:serviceaccount:ci:deployer`).
+    initialState:
+      kubeManifests: |
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: ci
+        ---
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: apps
+        ---
+        apiVersion: v1
+        kind: ServiceAccount
+        metadata:
+          name: deployer
+          namespace: ci
+        ---
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: RoleBinding
+        metadata:
+          name: deployer
+          namespace: apps
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: view
+        subjects:
+        - kind: ServiceAccount
+          name: deployer
+          namespace: default
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: web
+          namespace: apps
+          labels: { app: web }
+        spec:
+          replicas: 2
+          selector:
+            matchLabels: { app: web }
+          template:
+            metadata:
+              labels: { app: web }
+            spec:
+              containers:
+              - name: web
+                image: nginx:1.16.0
+      files:
+        /home/student/ci/deploy.log: |
+          $ kubectl apply -f ci/web.yaml
+          Error from server (Forbidden): error when retrieving current configuration of:
+          Resource: "apps/v1, Resource=deployments", GroupVersionKind: "apps/v1, Kind=Deployment"
+          Name: "web", Namespace: "apps"
+          from server for: "ci/web.yaml": deployments.apps "web" is forbidden: User "system:serviceaccount:ci:deployer" cannot get resource "deployments" in API group "apps" in the namespace "apps"
+          ERROR: job failed: exit code 1
+        /home/student/ci/web.yaml: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: web
+            namespace: apps
+            labels: { app: web }
+          spec:
+            replicas: 2
+            selector:
+              matchLabels: { app: web }
+            template:
+              metadata:
+                labels: { app: web }
+              spec:
+                containers:
+                - name: web
+                  image: nginx:1.27
+      setupAge: 900
+    hints: []
+    validator:
+      checks:
+        - type: kubeCanI
+          as: system:serviceaccount:ci:deployer
+          verb: patch
+          resource: deployments
+          namespace: apps
+          allowed: true
+        - type: kubeRollout
+          name: web
+          namespace: apps
+          image: nginx:1.27
+        - type: commandUsed
+          command: kubectl
+          argsInclude: [--as=system:serviceaccount:ci:deployer]
+          succeeded: true
+      guards:
+        - type: kubeCanI
+          as: system:serviceaccount:ci:deployer
+          verb: create
+          resource: deployments
+          namespace: default
+          allowed: false
+          message: The CI account must not get rights outside apps.
+        - type: kubeCanI
+          as: system:serviceaccount:ci:deployer
+          verb: get
+          resource: secrets
+          namespace: kube-system
+          allowed: false
+          message: The CI account must not get cluster-wide rights.
+    xp: 200
+    par: 10
+    solution:
+      - cat ci/deploy.log
+      - kubectl get rolebinding -n apps -o wide
+      - kubectl auth can-i get deployments -n apps --as=system:serviceaccount:ci:deployer || true
+      - kubectl delete rolebinding deployer -n apps
+      - kubectl create rolebinding deployer -n apps --clusterrole=edit --serviceaccount=ci:deployer
+      - kubectl auth can-i patch deployments -n apps --as=system:serviceaccount:ci:deployer
+      - kubectl apply -f ci/web.yaml --as=system:serviceaccount:ci:deployer
+      - kubectl rollout status deployment/web -n apps
+    explain: |
+      The binding had two bugs: its subject was `deployer` in namespace **default** (not `ci`), so it
+      matched nobody, and it granted `view`, which can't patch anything. `roleRef` is immutable, so the
+      fix is delete + recreate — with `edit` via a **RoleBinding**, which keeps the grant inside `apps`.
+      `kubectl auth can-i … --as=…` before and after is the fastest RBAC debugging loop there is.

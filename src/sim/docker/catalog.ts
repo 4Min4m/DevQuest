@@ -86,6 +86,7 @@ export const CATALOG: CatalogImage[] = [
       { name: '1.27', size: 192_004_242, ageDays: 20 },
       { name: 'alpine', size: 47_983_515, ageDays: 20, alpine: true },
       { name: '1.27-alpine', size: 47_983_515, ageDays: 20, alpine: true },
+      { name: '1.16.0', size: 126_771_982, ageDays: 1900 },
     ],
     config: {
       entrypoint: ['/docker-entrypoint.sh'],

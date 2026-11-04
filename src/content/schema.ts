@@ -6,7 +6,7 @@ const BRANCHES = [
   'linux-basics', 'files-permissions', 'processes', 'text-processing', 'docker-basics',
   'images-dockerfile', 'volumes-networks', 'compose', 'troubleshooting',
   'systemd', 'network-tools', 'performance',
-  'version-control', 'git-branching', 'git-remotes', 'kubernetes', 'k8s-networking', 'k8s-troubleshooting', 'cicd', 'cloud-iac', 'observability', 'security',
+  'version-control', 'git-branching', 'git-remotes', 'kubernetes', 'k8s-networking', 'k8s-troubleshooting', 'k8s-storage', 'k8s-scheduling', 'k8s-traffic', 'k8s-rbac-helm', 'cicd', 'cloud-iac', 'observability', 'security',
 ];
 
 /** Collects every problem in a lesson file, so authors see them all at once. */
@@ -129,6 +129,22 @@ function checkCheck(c: unknown, where: string, p: Problems): void {
     case 'kubeHttp':
       needs('service');
       break;
+    case 'kubeVolumeFile':
+      needs('claim');
+      needs('path');
+      break;
+    case 'kubeIngress':
+      needs('host');
+      break;
+    case 'kubeCanI':
+      needs('as');
+      needs('verb');
+      needs('resource');
+      if (typeof c.allowed !== 'boolean') p.add(where, 'kubeCanI needs allowed: true/false');
+      break;
+    case 'helmRelease':
+      needs('name');
+      break;
     case 'diskUsageBelow':
     case 'inodeUsageBelow':
       needs('mount');
@@ -222,6 +238,9 @@ function checkMission(m: unknown, where: string, p: Problems): void {
   if (typeof m.xp !== 'number' || m.xp <= 0) p.add(where, "'xp' must be a positive number");
   if (typeof m.par !== 'number' || m.par <= 0) p.add(where, "'par' must be a positive number");
   if (!Array.isArray(m.solution) || !m.solution.length) p.add(where, "missing 'solution' (reference command lines)");
+  else m.solution.forEach((line, i) => {
+    if (typeof line !== 'string') p.add(`${where}.solution[${i}]`, 'must be a string (quote lines that contain ": ")');
+  });
   const v = m.validator;
   if (!isObj(v) || !Array.isArray(v.checks) || !v.checks.length) p.add(where, 'validator needs at least one check');
   else {

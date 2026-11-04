@@ -137,6 +137,11 @@ function viaIngress(ks: KubeState, req: Request, now: number, silent: boolean): 
   return answer(r);
 }
 
+/** A request to the ingress controller with this Host header (for validators). */
+export function ingressRequest(ks: KubeState, host: string, path: string, now: number): HttpResult {
+  return viaIngress(ks, { key: `http://${host}${path}`, host: 'localhost', port: 80, path, method: 'GET', headers: { host } }, now, true);
+}
+
 // ------------------------------------------------------------------ provider
 
 registerHttpProvider((state, req, opts) => {

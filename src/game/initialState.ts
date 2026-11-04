@@ -110,9 +110,10 @@ export function buildInitialState(spec: InitialStateSpec = {}): SimState {
     (state.git ??= { repos: {}, remotes: {} }).remotes[h.url] = remote;
   }
 
-  if (spec.kubeImages || spec.kubeManifests) {
+  if (spec.kubeImages || spec.kubeManifests || spec.kubeLoad) {
     const ks = clusterOf(state);
     Object.assign(ks.images, spec.kubeImages ?? {});
+    if (spec.kubeLoad) ks.load = { ...(ks.load ?? {}), ...spec.kubeLoad };
     reconcile(state);
     for (const doc of parseAllDocuments(spec.kubeManifests ?? '').map((d) => d.toJS()).filter(Boolean)) {
       const r = admit(ks, doc, state.clock, { source: 'mission', mode: 'apply', lastApplied: true });

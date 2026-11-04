@@ -1,0 +1,404 @@
+id: k8s-scheduling
+title: Scheduling & autoscaling
+branch: k8s-scheduling
+prerequisites: [k8s-storage]
+sources:
+  - 05-Kubernetes/06-Scheduling
+  - 05-Kubernetes/07-Autoscaling
+theory: |
+  The scheduler places each pod on a node in two passes: **filter** (which nodes *can* run it) and
+  **score** (which is best). What you control:
+
+  | Tool | Effect |
+  |---|---|
+  | `resources.requests` | the node must have that much unreserved CPU/memory (`Insufficient cpu`) |
+  | `nodeSelector` / node affinity | only nodes with these **labels** (`kubectl label node …`) |
+  | **taints** on nodes + **tolerations** on pods | a tainted node repels every pod that doesn't tolerate it |
+  | pod (anti-)affinity | together with / away from other pods (e.g. one replica per node) |
+
+  A taint is `key=value:Effect`. `NoSchedule` keeps new pods away, `PreferNoSchedule` is a soft version,
+  `NoExecute` also **evicts** running pods that don't tolerate it. Taints repel; they don't attract — a
+  dedicated node needs **both** a taint (keep others out) and a label + nodeSelector (pull yours in).
+
+  **Node maintenance:** `kubectl cordon` marks a node unschedulable (`SchedulingDisabled`), `kubectl drain`
+  cordons it *and* evicts its pods (refusing DaemonSet pods and bare pods unless you say
+  `--ignore-daemonsets` / `--force`), `kubectl uncordon` brings it back. A forgotten cordon quietly
+  shrinks your cluster.
+
+  **HorizontalPodAutoscaler:** every 15s it compares average usage to a target **relative to the pods'
+  requests**: `desired = ceil(current × usage / target)`, within `minReplicas…maxReplicas`. No CPU request
+  → no percentage → `TARGETS <unknown>` and no scaling. It needs **metrics-server** (installed here).
+  Scale-down waits 5 minutes (stabilization) so traffic dips don't cause flapping.
+
+  `kubectl autoscale deployment web --cpu-percent=50 --min=2 --max=10` · `kubectl get hpa` ·
+  `kubectl describe hpa` (Conditions + events explain everything).
+missions:
+  - id: taints
+    title: A node just for training jobs
+    type: guided
+    prompt: |
+      `devquest-worker2` is getting a GPU. Only the ML team's pods may run there.
+
+      1. **Taint** `devquest-worker2` with `gpu=true:NoSchedule` and **label** it `gpu=true`.
+      2. Apply `k8s/trainer.yaml` (it already has the matching toleration and nodeSelector).
+
+      All `trainer` pods must land on `devquest-worker2`.
+    initialState:
+      files:
+        /home/student/k8s/trainer.yaml: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: trainer
+            labels: { app: trainer }
+          spec:
+            replicas: 2
+            selector:
+              matchLabels: { app: trainer }
+            template:
+              metadata:
+                labels: { app: trainer }
+              spec:
+                nodeSelector:
+                  gpu: "true"
+                tolerations:
+                - key: gpu
+                  operator: Equal
+                  value: "true"
+                  effect: NoSchedule
+                containers:
+                - name: trainer
+                  image: busybox
+                  command: ["sh", "-c", "sleep 3600"]
+    hints:
+      - text: "`kubectl taint nodes devquest-worker2 gpu=true:NoSchedule`"
+        cost: 5
+      - text: "`kubectl label node devquest-worker2 gpu=true`"
+        cost: 5
+      - text: "`kubectl apply -f k8s/trainer.yaml`, then `kubectl get pods -o wide` — check the NODE column."
+        cost: 5
+    validator:
+      checks:
+        - type: kubeResource
+          kind: Node
+          name: devquest-worker2
+          path: spec.taints
+          regex: '"key":"gpu".*"value":"true"|"value":"true".*"key":"gpu"'
+          message: devquest-worker2 should carry the taint gpu=true:NoSchedule.
+        - type: kubeResource
+          kind: Node
+          name: devquest-worker2
+          path: metadata.labels.gpu
+          equals: "true"
+        - type: kubePods
+          selector: app=trainer
+          ready: 2
+          node: devquest-worker2
+    xp: 50
+    par: 5
+    solution:
+      - kubectl taint nodes devquest-worker2 gpu=true:NoSchedule
+      - kubectl label node devquest-worker2 gpu=true
+      - kubectl apply -f k8s/trainer.yaml
+      - kubectl rollout status deployment/trainer
+      - kubectl get pods -o wide
+    explain: |
+      The **toleration** lets trainer pods past the taint; the **nodeSelector** makes them *go* there. Without
+      the label they would have tolerated worker2 but could still land anywhere; without the taint every
+      other workload could fill the GPU node.
+
+  - id: drain
+    title: Maintenance window
+    type: guided
+    prompt: |
+      `devquest-worker` needs a kernel upgrade. **Drain it** so the `web` pods move to other nodes
+      (keep all 4 replicas serving), then — "upgrade done" — **put it back into service**.
+    initialState:
+      kubeManifests: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: web
+          labels: { app: web }
+        spec:
+          replicas: 4
+          selector:
+            matchLabels: { app: web }
+          template:
+            metadata:
+              labels: { app: web }
+            spec:
+              containers:
+              - name: web
+                image: nginx:1.27
+    hints:
+      - text: "`kubectl get pods -o wide` shows which pods run on devquest-worker."
+        cost: 5
+      - text: "`kubectl drain devquest-worker --ignore-daemonsets` (kube-proxy and kindnet are DaemonSet pods: they stay)."
+        cost: 5
+      - text: "`kubectl uncordon devquest-worker` when you're done."
+        cost: 5
+    validator:
+      checks:
+        - type: commandUsed
+          command: kubectl
+          argsInclude: [drain]
+          succeeded: true
+        - type: kubeRollout
+          name: web
+          replicas: 4
+        - type: kubeResource
+          kind: Node
+          name: devquest-worker
+          path: spec.unschedulable
+          equals: ""
+          message: devquest-worker should be schedulable again (uncordoned).
+    xp: 50
+    par: 5
+    solution:
+      - kubectl get pods -o wide
+      - kubectl drain devquest-worker --ignore-daemonsets
+      - kubectl get pods -o wide
+      - kubectl uncordon devquest-worker
+    explain: |
+      `drain` = cordon + evict. The Deployment replaced each evicted pod on the remaining nodes, so the app
+      never dropped below its replica count (with a **PodDisruptionBudget** you can make drain wait to
+      keep a minimum available). Uncordoning doesn't move pods back — new pods will use the node again.
+
+  - id: hpa
+    title: Scale on CPU
+    type: guided
+    prompt: |
+      The `api` Deployment is getting hammered — `kubectl top pods` shows it. **Make it scale
+      automatically: 2 to 8 replicas, targeting 50% CPU.** Each pod should request `100m` CPU.
+    initialState:
+      kubeImages:
+        ghcr.io/acme/api:3.0:
+          listen: [8080]
+          logs: ["api 3.0 listening on :8080"]
+          http: { "/": { body: "api ok\n" } }
+          cpuM: 5
+          memMi: 40
+      kubeLoad:
+        default/api: 900
+      kubeManifests: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: api
+          labels: { app: api }
+        spec:
+          replicas: 2
+          selector:
+            matchLabels: { app: api }
+          template:
+            metadata:
+              labels: { app: api }
+            spec:
+              containers:
+              - name: api
+                image: ghcr.io/acme/api:3.0
+                ports:
+                - containerPort: 8080
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: api
+        spec:
+          selector: { app: api }
+          ports:
+          - port: 80
+            targetPort: 8080
+    hints:
+      - text: "`kubectl set resources deployment api --requests=cpu=100m` — the HPA's percentage is relative to the request."
+        cost: 5
+      - text: "`kubectl autoscale deployment api --cpu-percent=50 --min=2 --max=8`"
+        cost: 5
+      - text: "The HPA checks every 15 seconds: `sleep 60`, then `kubectl get hpa`."
+        cost: 5
+    validator:
+      checks:
+        - type: kubeResource
+          kind: HorizontalPodAutoscaler
+          name: api
+          path: spec.maxReplicas
+          equals: "8"
+        - type: kubeResource
+          kind: Deployment
+          name: api
+          path: spec.template.spec.containers.0.resources.requests.cpu
+          equals: 100m
+        - type: kubeResource
+          kind: Deployment
+          name: api
+          path: spec.replicas
+          equals: "8"
+          message: Under this load the HPA should have scaled api to its maximum (8).
+    xp: 60
+    par: 5
+    solution:
+      - kubectl top pods
+      - kubectl set resources deployment api --requests=cpu=100m
+      - kubectl autoscale deployment api --cpu-percent=50 --min=2 --max=8
+      - sleep 60
+      - kubectl get hpa api
+    explain: |
+      ~900m of demand over 2 pods with a 100m request is ~450% utilization, way over the 50% target, so the
+      HPA raised the replica count (by up to 4 pods or 100% per step) until it hit `maxReplicas` —
+      `describe hpa` now shows `ScalingLimited True TooManyReplicas`. When load drops it waits 5 minutes
+      before scaling down.
+
+  - id: k8s-scheduling-check
+    title: "Knowledge check: scheduling & autoscaling"
+    type: quiz
+    prompt: Where will it run, and how many?
+    xp: 30
+    questions:
+      - kind: single
+        prompt: A node has the taint `dedicated=db:NoSchedule`. A pod without tolerations…
+        options:
+          - is evicted from it immediately
+          - won't be scheduled onto it
+          - runs there with lower priority
+          - is scheduled there only if it has a nodeSelector
+        answer: 1
+      - kind: single
+        prompt: Which taint effect also evicts pods that are already running?
+        options: [NoSchedule, PreferNoSchedule, NoExecute]
+        answer: 2
+      - kind: single
+        prompt: "`kubectl get hpa` shows `cpu: <unknown>/50%`. The most likely cause?"
+        options:
+          - The Deployment has too many replicas
+          - The pods have no CPU request (or metrics-server is missing)
+          - The target should be 80%
+          - The Service has no endpoints
+        answer: 1
+      - kind: number
+        prompt: "An HPA targets 50% CPU. 4 pods average 100% of their request. How many replicas does it want?"
+        answer: 8
+        explain: ceil(4 × 100 / 50) = 8 (if maxReplicas allows it).
+      - kind: single
+        prompt: What does `kubectl drain node1 --ignore-daemonsets` do?
+        options:
+          - Deletes the node from the cluster
+          - Cordons node1 and evicts its pods except DaemonSet pods
+          - Moves DaemonSet pods to other nodes
+          - Restarts the kubelet
+        answer: 1
+
+  - id: boss-black-friday
+    title: "Boss: Black Friday"
+    type: boss
+    prompt: |
+      🛒 It's Black Friday. **`checkout`** in namespace **`shop`** is at 2 replicas and melting — the HPA
+      that should have scaled it "isn't doing anything".
+
+      **Make the autoscaler work so checkout scales out (at least 4 ready replicas, max 10, 50% CPU).**
+      Each checkout pod should request `200m` CPU.
+    initialState:
+      kubeImages:
+        ghcr.io/acme/checkout:7.3:
+          listen: [8080]
+          logs: ["checkout 7.3 ready on :8080"]
+          http: { "/": { body: "checkout ok\n" } }
+          cpuM: 8
+          memMi: 60
+      kubeLoad:
+        shop/checkout: 1500
+      kubeManifests: |
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: shop
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: checkout
+          namespace: shop
+          labels: { app: checkout }
+        spec:
+          replicas: 2
+          selector:
+            matchLabels: { app: checkout }
+          template:
+            metadata:
+              labels: { app: checkout }
+            spec:
+              containers:
+              - name: checkout
+                image: ghcr.io/acme/checkout:7.3
+                ports:
+                - containerPort: 8080
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: checkout
+          namespace: shop
+        spec:
+          selector: { app: checkout }
+          ports:
+          - port: 80
+            targetPort: 8080
+        ---
+        apiVersion: autoscaling/v2
+        kind: HorizontalPodAutoscaler
+        metadata:
+          name: checkout
+          namespace: shop
+        spec:
+          scaleTargetRef:
+            apiVersion: apps/v1
+            kind: Deployment
+            name: check-out
+          minReplicas: 2
+          maxReplicas: 10
+          metrics:
+          - type: Resource
+            resource:
+              name: cpu
+              target:
+                type: Utilization
+                averageUtilization: 50
+      setupAge: 600
+    hints: []
+    validator:
+      checks:
+        - type: kubeResource
+          kind: HorizontalPodAutoscaler
+          name: checkout
+          namespace: shop
+          path: spec.scaleTargetRef.name
+          equals: checkout
+        - type: kubeResource
+          kind: Deployment
+          name: checkout
+          namespace: shop
+          path: spec.template.spec.containers.0.resources.requests.cpu
+          equals: 200m
+        - type: kubePods
+          selector: app=checkout
+          namespace: shop
+          ready: 4
+        - type: kubeHttp
+          service: checkout
+          namespace: shop
+          contains: checkout ok
+    xp: 200
+    par: 9
+    solution:
+      - kubectl get hpa -n shop
+      - kubectl describe hpa checkout -n shop
+      - kubectl delete hpa checkout -n shop
+      - kubectl autoscale deployment checkout -n shop --cpu-percent=50 --min=2 --max=10
+      - kubectl set resources deployment checkout -n shop --requests=cpu=200m
+      - sleep 90
+      - kubectl get hpa,deployment -n shop
+    explain: |
+      The HPA pointed at `check-out` (`FailedGetScale … deployments/scale.apps "check-out" not found`), and
+      even with the right target it couldn't compute a percentage: `missing request for cpu`. Two
+      separate bugs, both visible in `kubectl describe hpa` → **Conditions** and **Events**. With a 200m
+      request, ~1500m of demand is far above 50%, so it scaled straight up.

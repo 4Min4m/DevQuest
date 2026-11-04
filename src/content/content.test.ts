@@ -15,10 +15,11 @@ describe('lesson catalog', () => {
       'systemd', 'network-tools', 'performance',
       'version-control', 'git-branching', 'git-remotes',
       'kubernetes', 'k8s-networking', 'k8s-troubleshooting',
+      'k8s-storage', 'k8s-scheduling', 'k8s-traffic', 'k8s-rbac-helm',
     ]);
     const missions = lessons.flatMap((l) => l.missions);
-    expect(missions.filter((m) => m.type === 'guided' || m.type === 'free')).toHaveLength(49); // 8 Linux + 8 Docker + 7 services/network/performance + 13 Git + 13 Kubernetes
-    expect(missions.filter((m) => m.type === 'boss')).toHaveLength(13);
+    expect(missions.filter((m) => m.type === 'guided' || m.type === 'free')).toHaveLength(61); // 8 Linux + 8 Docker + 7 services/network/performance + 13 Git + 25 Kubernetes
+    expect(missions.filter((m) => m.type === 'boss')).toHaveLength(17);
     expect(missions.filter((m) => m.type === 'quiz').length).toBeGreaterThanOrEqual(20);
   });
 
@@ -116,7 +117,8 @@ describe.each(terminalMissions)('mission %s', (_name, mission) => {
       expect(result.exitCode, `exit code of '${line}'`).toBe(0);
       // Progress notes are fine, `docker logs` replays the container's own stderr, and
       // `cmd || true` marks a step that is expected to fail (e.g. a merge that stops on a conflict).
-      if (/^docker( compose)? logs\b/.test(line) || /\|\| true$/.test(line)) continue;
+      // `kubectl drain` prints a real "Warning: ignoring DaemonSet-managed Pods" line on stderr.
+      if (/^docker( compose)? logs\b/.test(line) || /^kubectl drain\b/.test(line) || /\|\| true$/.test(line)) continue;
       const stderr = result.output.filter((c) => c.stream === 'stderr' && !c.note).map((c) => c.text).join('');
       expect(stderr, `stderr of '${line}'`).toBe('');
     }
