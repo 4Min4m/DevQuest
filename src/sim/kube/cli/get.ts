@@ -1,7 +1,7 @@
 import { qualified, RESOURCES, ResourceInfo } from '../cluster';
 import { columns, customColumns, describe, eventsTable, jsonPath, table, toJson, toYaml, clean } from '../printers';
 import type { KObj } from '../types';
-import { findOne, Flags, KCtx, KubectlError, listFor, namespaceOf, notFound, parseFlags, resolveResource, targets, selectorMatches, fieldMatches } from './common';
+import { authorize, findOne, Flags, KCtx, KubectlError, listFor, namespaceOf, notFound, parseFlags, resolveResource, targets, selectorMatches, fieldMatches } from './common';
 
 const ALL = ['Pod', 'Service', 'DaemonSet', 'Deployment', 'ReplicaSet', 'Job'];
 
@@ -56,6 +56,7 @@ export function kubectlGet(k: KCtx, argv: string[]): number {
   let code = 0;
   for (const { res, names } of wanted) {
     if (res.kind === 'Event') {
+      authorize(k, 'list', res, f.flags['all-namespaces'] ? undefined : ns);
       let evs = k.ks.events.filter((e) => f.flags['all-namespaces'] || e.namespace === ns);
       if (f.flags['field-selector']) {
         evs = evs.filter((e) => fieldMatches({ involvedObject: { name: e.involved.name, kind: e.involved.kind }, type: e.type, reason: e.reason } as unknown as KObj, f.flags['field-selector'] as string));
@@ -69,6 +70,7 @@ export function kubectlGet(k: KCtx, argv: string[]): number {
       const objs: KObj[] = [];
       for (const n of names) {
         try {
+          authorize(k, 'get', res, ns, n);
           objs.push(findOne(k, res, ns, n));
         } catch (e) {
           if (f.flags['ignore-not-found']) continue;
@@ -77,7 +79,10 @@ export function kubectlGet(k: KCtx, argv: string[]): number {
         }
       }
       groups.push({ res, objs, named: true });
-    } else groups.push({ res, objs: listFor(k, res, f), named: false });
+    } else {
+      authorize(k, 'list', res, f.flags['all-namespaces'] ? undefined : ns);
+      groups.push({ res, objs: listFor(k, res, f), named: false });
+    }
   }
   if (f.flags['sort-by']) {
     const path = (f.flags['sort-by'] as string).replace(/^\{?\.?/, '').replace(/\}$/, '');
@@ -104,6 +109,7 @@ export function kubectlDescribe(k: KCtx, argv: string[]): number {
     if (names.length) {
       objs = [];
       for (const n of names) {
+        authorize(k, 'get', res, ns, n);
         const all = listFor(k, res, { ...f, flags: { ...f.flags, selector: undefined as unknown as string } }).filter((o) => o.metadata.name === n || o.metadata.name.startsWith(n));
         const exact = all.find((o) => o.metadata.name === n);
         if (exact) objs.push(exact);
@@ -113,7 +119,10 @@ export function kubectlDescribe(k: KCtx, argv: string[]): number {
           code = 1;
         }
       }
-    } else objs = listFor(k, res, f);
+    } else {
+      authorize(k, 'list', res, f.flags['all-namespaces'] ? undefined : ns);
+      objs = listFor(k, res, f);
+    }
     if (!names.length && !objs.length) {
       noneFound(k, f, res);
       continue;

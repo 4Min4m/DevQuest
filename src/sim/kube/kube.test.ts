@@ -52,7 +52,7 @@ describe('cluster basics', () => {
     expect(t.run('kubectl get pod nope')).toMatchObject({ err: 'Error from server (NotFound): pods "nope" not found\n', code: 1 });
     expect(t.run('kubectl get deploy nope').err).toBe('Error from server (NotFound): deployments.apps "nope" not found\n');
     expect(t.run('kubectl get pods --bogus').err).toBe("error: unknown flag: --bogus\nSee 'kubectl get --help' for usage.\n");
-    expect(t.run('kubectl cordon x').err).toMatch(/not simulated yet/);
+    expect(t.run('kubectl explain pods').err).toMatch(/not simulated yet/);
   });
 
   it('is not installed inside containers', () => {

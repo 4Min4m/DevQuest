@@ -416,6 +416,7 @@ export function createKubeState(now: number): KubeState {
     rule(['batch'], ['cronjobs', 'jobs'], READ),
     rule(['autoscaling'], ['horizontalpodautoscalers'], READ),
     rule(['networking.k8s.io'], ['ingresses', 'networkpolicies'], READ),
+    rule(['metrics.k8s.io'], ['pods', 'nodes'], READ),
   ];
   const editRules = [
     rule([''], ['pods', 'pods/attach', 'pods/exec', 'pods/portforward', 'pods/proxy', 'configmaps', 'secrets', 'services', 'persistentvolumeclaims', 'serviceaccounts', 'endpoints', 'replicationcontrollers'], WRITE),

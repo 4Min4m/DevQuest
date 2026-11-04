@@ -1,12 +1,13 @@
 import { parseAllDocuments } from 'yaml';
 import { joinPath, resolvePath } from '../../vfs/path';
 import { isVfsError } from '../../vfs/types';
-import { getObj, listObjs, ownedBy, putObj, qualified, removeObj, ResourceInfo } from '../cluster';
+import { getObj, infoOf, listObjs, ownedBy, putObj, qualified, removeObj, ResourceInfo, resourceFor } from '../cluster';
 import { advance, isTerminating, templateHash } from '../controllers';
 import { admit, AdmissionError } from '../manifest';
 import { clean, kyaml } from '../printers';
 import type { J, KObj } from '../types';
-import { findOne, Flags, groupResource, KCtx, KubectlError, listFor, namespaceOf, parseFlags, resolveResource, targets } from './common';
+import { createExtra, CREATE_EXTRA_FLAGS, setCreator } from './admin';
+import { authorize, findOne, Flags, groupResource, KCtx, KubectlError, listFor, namespaceOf, parseFlags, resolveResource, targets } from './common';
 
 
 
@@ -79,13 +80,24 @@ function applyDocs(k: KCtx, f: Flags, mode: 'apply' | 'create' | 'replace'): num
   const printed: KObj[] = [];
   for (const { source, doc } of docs) {
     try {
+      const res = typeof doc?.kind === 'string' ? resourceFor(doc.kind) : undefined;
+      if (res && k.id && typeof doc.metadata?.name === 'string') {
+        const targetNs = res.namespaced ? (doc.metadata.namespace ?? ns ?? k.ks.namespace) : undefined;
+        const name = doc.metadata.name;
+        if (mode === 'apply') {
+          const gv = res.apiVersion.includes('/') ? res.apiVersion : `/${res.apiVersion}`;
+          authorize(k, 'get', res, targetNs, name, undefined, `error when retrieving current configuration of:\nResource: "${gv}, Resource=${res.plural}", GroupVersionKind: "${gv}, Kind=${res.kind}"\nName: "${name}", Namespace: "${targetNs ?? ''}"\nfrom server for: "${source}": `);
+        }
+        if (getObj(k.ks, res.kind, targetNs, name)) authorize(k, mode === 'apply' ? 'patch' : 'update', res, targetNs, name, undefined, `error when patching "${source}": `);
+        else authorize(k, 'create', res, targetNs, undefined, undefined, `error when creating "${source}": `);
+      }
       const shadow = dryRun(f) ? JSON.parse(JSON.stringify(k.ks)) : k.ks;
       const r = admit(shadow, doc, k.now, { source, mode, namespace: ns, lastApplied: mode === 'apply' });
       if (!dryRun(f) && r.action === 'created') putObj(k.ks, r.obj);
       if (f.flags.output) printed.push(r.obj);
       else k.out(`${qualified(r.obj.kind, r.obj.metadata.name)} ${r.action}${dryRun(f) ? ` (${f.flags['dry-run'] === 'server' ? 'server' : 'client'} dry run)` : ''}\n`);
     } catch (e) {
-      if (!(e instanceof AdmissionError)) throw e;
+      if (!(e instanceof AdmissionError) && !(e instanceof KubectlError)) throw e;
       k.err(e.message + '\n');
       code = 1;
     }
@@ -113,18 +125,20 @@ export function kubectlApply(k: KCtx, argv: string[]): number {
 
 // ------------------------------------------------------------------ create
 
-function dumpOrCreate(k: KCtx, f: Flags, manifest: J): number {
+function dumpOrCreate(k: KCtx, f: Flags, manifest: J, verb = 'created'): number {
   if (dryRun(f)) {
     if (f.flags.output === 'yaml') k.out(kyaml(manifest));
     else if (f.flags.output === 'json') k.out(JSON.stringify(manifest, null, 4) + '\n');
-    else k.out(`${qualified(manifest.kind, manifest.metadata.name)} created (${f.flags['dry-run'] === 'server' ? 'server' : 'client'} dry run)\n`);
+    else k.out(`${qualified(manifest.kind, manifest.metadata.name)} ${verb} (${f.flags['dry-run'] === 'server' ? 'server' : 'client'} dry run)\n`);
     return 0;
   }
+  const res = infoOf(manifest.kind);
+  authorize(k, 'create', res, res.namespaced ? ((f.flags.namespace as string | undefined) ?? k.ks.namespace) : undefined);
   try {
     const r = admit(k.ks, manifest, k.now, { source: 'STDIN', mode: 'create', namespace: f.flags.namespace as string | undefined });
     putObj(k.ks, r.obj);
     if (f.flags.output) printObjs(k, f, [r.obj]);
-    else k.out(`${qualified(r.obj.kind, r.obj.metadata.name)} created\n`);
+    else k.out(`${qualified(r.obj.kind, r.obj.metadata.name)} ${verb}\n`);
     return 0;
   } catch (e) {
     if (!(e instanceof AdmissionError)) throw e;
@@ -173,7 +187,7 @@ function literalPairs(k: KCtx, f: Flags, decode: boolean): Record<string, string
 export function kubectlCreate(k: KCtx, argv: string[]): number {
   const f = parseFlags('create', argv, {
     bool: ['R', 'recursive', 'save-config'],
-    value: ['f', 'filename', 'o', 'output', 'dry-run', 'image', 'replicas', 'port', 'from-literal', 'from-file', 'from-env-file', 'tcp', 'node-port', 'type', 'schedule', 'restart'],
+    value: ['f', 'filename', 'o', 'output', 'dry-run', 'image', 'replicas', 'port', 'from-literal', 'from-file', 'from-env-file', 'tcp', 'node-port', 'type', 'schedule', 'restart', ...CREATE_EXTRA_FLAGS],
     alias: { f: 'filename', o: 'output', R: 'recursive', r: 'replicas' },
   });
   if (f.flags['dry-run'] === true) f.flags['dry-run'] = 'client';
@@ -232,8 +246,11 @@ export function kubectlCreate(k: KCtx, argv: string[]): number {
     }
     case undefined:
       throw new KubectlError("error: must specify one of -f and -k\n\nSee 'kubectl create -h' for help and examples");
-    default:
-      throw new KubectlError(`devquest: kubectl create ${what} is not simulated (try deployment, configmap, secret generic, namespace, service, job, or -f FILE)`);
+    default: {
+      const manifest = createExtra(f, what, a1);
+      if (manifest) return dumpOrCreate(k, f, manifest);
+      throw new KubectlError(`devquest: kubectl create ${what} is not simulated (try deployment, configmap, secret generic, namespace, service, job, cronjob, ingress, serviceaccount, role, rolebinding, clusterrole, clusterrolebinding, or -f FILE)`);
+    }
   }
 }
 
@@ -275,6 +292,7 @@ export function kubectlRun(k: KCtx, argv: string[]): number {
   if (dryRun(f)) return dumpOrCreate(k, f, manifest);
   if (f.flags.rm && !f.flags.stdin) throw new KubectlError('error: --rm should only be used for attached containers');
   const ns = namespaceOf(k, f);
+  authorize(k, 'create', infoOf('Pod'), ns);
   if (getObj(k.ks, 'Pod', ns, name)) throw new KubectlError(`Error from server (AlreadyExists): pods "${name}" already exists`);
   try {
     putObj(k.ks, admit(k.ks, manifest, k.now, { source: 'STDIN', mode: 'create', namespace: ns }).obj);
@@ -344,6 +362,7 @@ export function kubectlDelete(k: KCtx, argv: string[]): number {
   if (f.multi.filename?.length) {
     for (const { doc } of readManifests(k, f.multi.filename, !!f.flags.recursive)) {
       const res = resolveResource(doc.kind);
+      authorize(k, 'delete', res, res.namespaced ? doc.metadata?.namespace ?? ns : undefined, doc.metadata?.name, undefined, `error when deleting "${f.multi.filename[0]}": `);
       const o = getObj(k.ks, doc.kind, doc.metadata?.namespace ?? ns, doc.metadata?.name);
       if (!o) {
         if (!f.flags['ignore-not-found']) {
@@ -359,6 +378,7 @@ export function kubectlDelete(k: KCtx, argv: string[]): number {
     for (const { res, names } of targets(f.args)) {
       if (names.length) {
         for (const n of names) {
+          authorize(k, 'delete', res, ns, n);
           const o = getObj(k.ks, res.kind, ns, n);
           if (!o) {
             if (!f.flags['ignore-not-found']) {
@@ -370,6 +390,7 @@ export function kubectlDelete(k: KCtx, argv: string[]): number {
           victims.push({ res, obj: o });
         }
       } else if (f.flags.all || f.flags.selector || f.flags['field-selector']) {
+        authorize(k, 'list', res, ns);
         for (const o of listFor(k, res, f)) victims.push({ res, obj: o });
         if (!victims.length) k.err(`No resources found\n`);
       } else throw new KubectlError(`error: resource(s) were provided, but no name was specified`);
@@ -401,6 +422,11 @@ export function deleteObject(k: KCtx, obj: KObj, force = false): void {
     removeObj(k.ks, obj);
     return;
   }
+  if (!force && obj.metadata.finalizers?.length) {
+    // e.g. kubernetes.io/pvc-protection: the object stays Terminating until the finalizer is removed.
+    obj.metadata.deletionTimestamp ??= new Date(k.now).toISOString().replace(/\.\d+Z$/, 'Z');
+    return;
+  }
   if (obj.kind === 'Service') {
     const ep = getObj(k.ks, 'Endpoints', obj.metadata.namespace, obj.metadata.name);
     if (ep) removeObj(k.ks, ep);
@@ -415,7 +441,9 @@ export function kubectlEdit(k: KCtx, argv: string[]): number {
   const ns = namespaceOf(k, f);
   const t = targets(f.args);
   if (!t.length || !t[0].names.length) throw new KubectlError('error: edit needs a resource and a name, e.g. kubectl edit deployment/web');
+  authorize(k, 'get', t[0].res, ns, t[0].names[0]);
   const obj = findOne(k, t[0].res, ns, t[0].names[0]);
+  authorize(k, 'patch', t[0].res, ns, t[0].names[0]);
   const shown = clean(obj);
   const header = `# Please edit the object below. Lines beginning with a '#' will be ignored,\n# and an empty file will abort the edit. If an error occurs while saving this file will be\n# reopened with the relevant failures.\n#\n`;
   const ks = k.ks;
@@ -493,6 +521,7 @@ function workload(k: KCtx, f: Flags, verb: string): KObj[] {
   for (const { res, names } of targets(f.args)) {
     if (names.length) for (const n of names) out.push(findOne(k, res, ns, n));
     else out.push(...listFor(k, res, f));
+    for (const o of out) authorize(k, 'patch', res, ns, o.metadata.name, verb === 'scale' ? 'scale' : undefined);
   }
   return out;
 }
@@ -503,7 +532,7 @@ export function kubectlScale(k: KCtx, argv: string[]): number {
   const n = Number(f.flags.replicas);
   if (!Number.isInteger(n) || n < 0) throw new KubectlError('error: The --replicas=COUNT flag is required, and COUNT must be greater than or equal to 0');
   for (const o of workload(k, f, 'scale')) {
-    if (!['Deployment', 'ReplicaSet'].includes(o.kind)) throw new KubectlError(`error: no objects passed to scale ${o.kind.toLowerCase()} "${o.metadata.name}"`);
+    if (!['Deployment', 'ReplicaSet', 'StatefulSet'].includes(o.kind)) throw new KubectlError(`error: no objects passed to scale ${o.kind.toLowerCase()} "${o.metadata.name}"`);
     if (o.spec.replicas !== n) {
       o.spec.replicas = n;
       o.metadata.generation = (o.metadata.generation ?? 1) + 1;
@@ -645,6 +674,33 @@ function revisions(k: KCtx, d: KObj): { rev: number; rs: KObj }[] {
     .sort((a, b) => a.rev - b.rev);
 }
 
+function stsRolloutStatus(k: KCtx, ns: string, name: string): number {
+  let last = '';
+  for (let i = 0; i <= 180; i++) {
+    const s = getObj(k.ks, 'StatefulSet', ns, name);
+    if (!s) throw new KubectlError(`error: statefulset "${name}" not found`);
+    const st = s.status ?? {};
+    const want = s.spec.replicas ?? 1;
+    let msg: string;
+    let done = false;
+    if ((st.observedGeneration ?? 0) < (s.metadata.generation ?? 1)) msg = 'Waiting for statefulset spec update to be observed...';
+    else if ((st.readyReplicas ?? 0) < want) msg = `Waiting for ${want - (st.readyReplicas ?? 0)} pods to be ready...`;
+    else if ((st.updatedReplicas ?? 0) < want) msg = `Waiting for partitioned roll out to finish: ${st.updatedReplicas ?? 0} out of ${want} new pods have been updated...`;
+    else {
+      msg = s.spec.updateStrategy?.rollingUpdate?.partition ? `partitioned roll out complete: ${want} new pods have been updated...` : `statefulset rolling update complete ${want} pods at revision ${st.updateRevision}...`;
+      done = true;
+    }
+    if (msg !== last) {
+      k.out(msg + '\n');
+      last = msg;
+    }
+    if (done) return 0;
+    advance(k.ctx.state, 1000);
+  }
+  k.note('devquest: stopped waiting after 3 minutes; check `kubectl get pods` and `kubectl describe statefulset`.\n');
+  return 1;
+}
+
 function rolloutState(d: KObj): { done: boolean; msg: string; failed?: boolean } {
   const s = d.status ?? {};
   const desired = d.spec.replicas ?? 1;
@@ -662,8 +718,13 @@ export function kubectlRollout(k: KCtx, argv: string[]): number {
   const ns = namespaceOf(k, f);
   const t = targets(f.args)[0];
   if (!t?.names.length) throw new KubectlError(`error: required resource not specified\nSee 'kubectl rollout ${sub} -h' for help and examples`);
-  if (t.res.kind !== 'Deployment' && t.res.kind !== 'DaemonSet') throw new KubectlError(`error: no rollout${sub === 'history' ? ' history' : ''} support for ${t.res.kind.toLowerCase()}s`);
+  if (t.res.kind !== 'Deployment' && t.res.kind !== 'DaemonSet' && t.res.kind !== 'StatefulSet') throw new KubectlError(`error: no rollout${sub === 'history' ? ' history' : ''} support for ${t.res.kind.toLowerCase()}s`);
+  authorize(k, sub === 'status' || sub === 'history' ? 'get' : 'patch', t.res, ns, t.names[0]);
   const d = findOne(k, t.res, ns, t.names[0]);
+  if (d.kind === 'StatefulSet' && ['history', 'undo', 'pause', 'resume'].includes(sub)) {
+    if (sub === 'pause' || sub === 'resume') throw new KubectlError(`error: statefulsets.apps "${d.metadata.name}" ${sub === 'pause' ? 'pausing' : 'resuming'} is not supported`);
+    throw new KubectlError(`devquest: rollout ${sub} for StatefulSets (ControllerRevisions) is not simulated; change the template and apply it again`);
+  }
   const q = qualified(d.kind, d.metadata.name);
   switch (sub) {
     case 'status': {
@@ -671,6 +732,7 @@ export function kubectlRollout(k: KCtx, argv: string[]): number {
         k.out(`daemon set "${d.metadata.name}" successfully rolled out\n`);
         return 0;
       }
+      if (d.kind === 'StatefulSet') return stsRolloutStatus(k, ns, d.metadata.name);
       let last = '';
       for (let i = 0; i <= 120; i++) {
         const cur = getObj(k.ks, 'Deployment', ns, d.metadata.name);
@@ -739,3 +801,5 @@ export function kubectlRollout(k: KCtx, argv: string[]): number {
 }
 
 export { templateHash };
+
+setCreator(dumpOrCreate);

@@ -559,3 +559,23 @@ export function hpaController(ks: KubeState, now: number): void {
     ];
   }
 }
+
+// ------------------------------------------------------------------ ingress status
+
+export function isNginxClass(ing: KObj): boolean {
+  return ing.spec?.ingressClassName === 'nginx' || ing.metadata.annotations?.['kubernetes.io/ingress.class'] === 'nginx';
+}
+
+/** ingress-nginx (as kind deploys it) publishes "localhost" as the address of the Ingresses it serves. */
+export function ingressStatusController(ks: KubeState, now: number): void {
+  const ctrl = getObj(ks, 'Deployment', 'ingress-nginx', 'ingress-nginx-controller');
+  const up = (ctrl?.status?.availableReplicas ?? 0) > 0;
+  for (const ing of listObjs(ks, 'Ingress')) {
+    const served = up && isNginxClass(ing);
+    const want = served ? { ingress: [{ hostname: 'localhost' }] } : {};
+    if (JSON.stringify(ing.status?.loadBalancer ?? {}) !== JSON.stringify(want)) {
+      ing.status = { loadBalancer: want };
+      if (served) emit(ks, now, ing, 'Normal', 'Sync', 'Scheduled for sync', 'nginx-ingress-controller');
+    }
+  }
+}

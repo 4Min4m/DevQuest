@@ -1,6 +1,7 @@
 import type { CommandContext } from '../../shell/types';
 import { getObj, infoOf, listObjs, resourceFor, ResourceInfo } from '../cluster';
 import { reconcile } from '../controllers';
+import { ADMIN, allowed, forbiddenMessage, groupOf, Identity } from '../rbac';
 import type { J, KObj, KubeState } from '../types';
 
 export class KubectlError extends Error {
@@ -87,11 +88,23 @@ export interface KCtx {
   out: (t: string) => void;
   err: (t: string) => void;
   note: (t: string) => void;
+  /** Who the request runs as (`--as` impersonation). */
+  id: Identity;
 }
 
-export function kctx(ctx: CommandContext): KCtx {
+export function kctx(ctx: CommandContext, id: Identity = ADMIN): KCtx {
   const ks = reconcile(ctx.state);
-  return { ctx, ks, now: ctx.state.clock, out: ctx.out, err: ctx.err, note: ctx.note };
+  return { ctx, ks, now: ctx.state.clock, out: ctx.out, err: ctx.err, note: ctx.note, id };
+}
+
+/**
+ * RBAC check for one API request; throws the API server's Forbidden error.
+ * `sub` is a subresource ("log", "exec", "scale"); `prefix` goes before the message (e.g. `error when creating "x.yaml": `).
+ */
+export function authorize(k: KCtx, verb: string, res: ResourceInfo, ns: string | undefined, name?: string, sub?: string, prefix = ''): void {
+  if (k.id === ADMIN) return;
+  const req = { verb, resource: sub ? `${res.plural}/${sub}` : res.plural, group: groupOf(res), namespace: res.namespaced ? ns : undefined, name };
+  if (!allowed(k.ks, k.id, req)) throw new KubectlError(`Error from server (Forbidden): ${prefix}${forbiddenMessage(k.id, req)}`);
 }
 
 export function namespaceOf(k: KCtx, f: Flags): string {

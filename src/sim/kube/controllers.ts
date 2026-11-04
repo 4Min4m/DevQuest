@@ -32,6 +32,7 @@ import {
   claimData,
   cronJobController,
   hpaController,
+  ingressStatusController,
   serviceAccountController,
   setHelpers,
   statefulSetController,
@@ -1192,6 +1193,7 @@ function tick(host: SimState, ks: KubeState, now: number): void {
   garbageCollect(ks, now);
   serviceAccountController(ks, now);
   hpaController(ks, now);
+  ingressStatusController(ks, now);
   cronJobController(ks, now);
   deploymentController(ks, now);
   replicaSetController(ks, now);

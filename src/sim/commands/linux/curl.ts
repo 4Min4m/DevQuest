@@ -15,7 +15,8 @@ const STATUS_TEXT: Record<number, string> = {
   404: 'Not Found',
   500: 'Internal Server Error',
   502: 'Bad Gateway',
-  503: 'Service Unavailable',
+  503: 'Service Temporarily Unavailable',
+  504: 'Gateway Time-out',
 };
 
 /**
@@ -36,6 +37,7 @@ export const curl: CommandDef = {
     let timeout: number | undefined;
     let outFile: string | undefined;
     const urls: string[] = [];
+    const reqHeaders: Record<string, string> = {};
     // Expand combined boolean short flags: -sSfL → -s -S -f -L
     const args = ctx.args.flatMap((a) => (/^-[sSiIfLvk]{2,}$/.test(a) ? [...a.slice(1)].map((c) => '-' + c) : [a]));
     for (let i = 0; i < args.length; i++) {
@@ -61,7 +63,11 @@ export const curl: CommandDef = {
       } else if (a === '-L' || a === '--location' || a === '-k' || a === '--insecure') {
         /* accepted; no visible effect in the simulator */
       } else if (a === '-o' || a === '--output') outFile = args[++i];
-      else if (a === '-X' || a === '--request' || a === '-H' || a === '--header' || a === '-d' || a === '--data') i++;
+      else if (a === '-H' || a === '--header') {
+        const h = args[++i] ?? '';
+        const colon = h.indexOf(':');
+        if (colon > 0) reqHeaders[h.slice(0, colon).trim().toLowerCase()] = h.slice(colon + 1).trim();
+      } else if (a === '-X' || a === '--request' || a === '-d' || a === '--data') i++;
       else if (a.startsWith('-')) {
         ctx.err(`curl: option ${a}: is unknown (or not supported in devquest)\ncurl: try 'curl --help' for more information\n`);
         return 2;
@@ -82,6 +88,7 @@ export const curl: CommandDef = {
       }
       const ip = remoteIp(ctx.state, url.host);
       if (verbose && ip) ctx.err(`*   Trying ${ip}:${url.port}...\n`);
+      if (Object.keys(reqHeaders).length) url.headers = reqHeaders;
       let result = httpRequest(ctx.state, url);
       if (result.kind === 'error' && result.code === 28 && timeout !== undefined) {
         result = { kind: 'error', code: 28, message: `Failed to connect to ${url.host} port ${url.port} after ${Math.round(timeout * 1000) + 1} ms: Timeout was reached` };
@@ -98,7 +105,7 @@ export const curl: CommandDef = {
       }
       const res = result.res;
       if (verbose) {
-        let v = `* Connected to ${url.host} (${ip}) port ${url.port}\n> ${headOnly ? 'HEAD' : url.method} ${url.path} HTTP/1.1\n> Host: ${url.host}${url.port === 80 || url.port === 443 ? '' : ':' + url.port}\n> User-Agent: curl/8.5.0\n> Accept: */*\n>\n`;
+        let v = `* Connected to ${url.host} (${ip}) port ${url.port}\n> ${headOnly ? 'HEAD' : url.method} ${url.path} HTTP/1.1\n> Host: ${reqHeaders.host ?? url.host + (url.port === 80 || url.port === 443 ? '' : ':' + url.port)}\n> User-Agent: curl/8.5.0\n> Accept: */*\n>\n`;
         v += `< HTTP/1.1 ${res.status} ${STATUS_TEXT[res.status] ?? ''}\n`;
         const hs = { 'Content-Length': String(new TextEncoder().encode(res.body).length), ...(res.headers ?? {}) };
         for (const [k, val] of Object.entries(hs)) v += `< ${k}: ${val}\n`;

@@ -1,10 +1,11 @@
-import { getObj, listObjs, removeObj } from '../cluster';
+import { getObj, infoOf, listObjs, removeObj } from '../cluster';
+import { podUsage } from '../extra';
 import { containerEnv, isPodReady } from '../controllers';
 import { resolveImage } from '../images';
 import { podState } from '../podshell';
 import { kyaml, table } from '../printers';
 import type { KObj } from '../types';
-import { findOne, Flags, KCtx, KubectlError, namespaceOf, parseFlags, podFor, resolveResource, selectorMatches } from './common';
+import { authorize, findOne, Flags, KCtx, KubectlError, namespaceOf, parseFlags, podFor, resolveResource, selectorMatches } from './common';
 import { setAttach } from './workloads';
 
 function pickContainer(k: KCtx, pod: KObj, f: Flags, verb: string): string {
@@ -39,6 +40,7 @@ export function kubectlLogs(k: KCtx, argv: string[]): number {
     if (!ref) throw new KubectlError("error: expected 'logs [-f] [-p] (POD | TYPE/NAME) [-c CONTAINER]'.\nPOD or TYPE/NAME is a required argument for the logs command\nSee 'kubectl logs -h' for help and examples");
     if (f.args[1] && !f.flags.container) f.flags.container = f.args[1];
     const pod = podFor(k, ref, ns);
+    authorize(k, 'get', infoOf('Pod'), ns, pod.metadata.name, 'log');
     if (ref.includes('/') && !ref.startsWith('pod/') && !ref.startsWith('pods/') && !ref.startsWith('po/')) {
       const total = listObjs(k.ks, 'Pod', ns).filter((p) => p.metadata.ownerReferences?.length && pod.metadata.labels && Object.entries(pod.metadata.labels).every(([a, b]) => p.metadata.labels?.[a] === b)).length;
       if (total > 1) k.err(`Found ${total} pods, using pod/${pod.metadata.name}\n`);
@@ -113,6 +115,7 @@ export function kubectlExec(k: KCtx, argv: string[]): number {
     throw new KubectlError("error: you must specify at least one command for the container\nSee 'kubectl exec -h' for help and examples");
   }
   const pod = podFor(k, f.args[0], ns);
+  authorize(k, 'create', infoOf('Pod'), ns, pod.metadata.name, 'exec');
   const cname = pickContainer(k, pod, f, 'exec');
   const { state, image } = containerShell(k, pod, cname);
   const cmd = f.rest;
@@ -162,6 +165,7 @@ export function kubectlPortForward(k: KCtx, argv: string[]): number {
   const [ref, ...specs] = f.args;
   if (!ref || !specs.length) throw new KubectlError("error: TYPE/NAME and list of ports are required for port-forward\nSee 'kubectl port-forward -h' for help and examples");
   const pod = podFor(k, ref, ns);
+  authorize(k, 'create', infoOf('Pod'), ns, pod.metadata.name, 'portforward');
   if (pod.status?.phase !== 'Running') throw new KubectlError(`error: unable to forward port because pod is not running. Current status=${pod.status?.phase ?? 'Pending'}`);
   let svc: KObj | undefined;
   if (/^(svc|service|services)\//.test(ref)) svc = findOne(k, resolveResource('svc'), ns, ref.split('/')[1]);
@@ -190,21 +194,12 @@ export function kubectlPortForward(k: KCtx, argv: string[]): number {
 export function kubectlTop(k: KCtx, argv: string[]): number {
   const [what, ...rest] = argv;
   const f = parseFlags(`top ${what}`, rest, { value: ['l', 'selector', 'sort-by'], bool: ['containers', 'no-headers'], alias: { l: 'selector' } });
-  const usage = (p: KObj) => {
-    let cpu = 0;
-    let mem = 0;
-    for (const c of p.spec.containers) {
-      const cs = k.ks.runtime[p.metadata.uid]?.containers[c.name];
-      if (cs?.state !== 'running') continue;
-      const img = resolveImage(k.ks, c.image);
-      if (!img.ok) continue;
-      cpu += img.image.spec.cpuM ?? 1;
-      mem += img.image.spec.memMi ?? 5;
-    }
-    return { cpu, mem };
-  };
+  const usage = (p: KObj) => podUsage(k.ks, p);
+  const ms = getObj(k.ks, 'Deployment', 'kube-system', 'metrics-server');
+  if (!ms || !(ms.status?.availableReplicas > 0)) throw new KubectlError('error: Metrics API not available');
   if (what === 'pod' || what === 'pods' || what === 'po') {
     const ns = namespaceOf(k, f);
+    authorize(k, 'list', { ...infoOf('Pod'), apiVersion: 'metrics.k8s.io/v1beta1' }, f.flags['all-namespaces'] ? undefined : ns);
     let pods = listObjs(k.ks, 'Pod', f.flags['all-namespaces'] ? undefined : ns).filter((p) => p.status?.phase === 'Running');
     if (f.flags.selector) pods = pods.filter((p) => selectorMatches(p.metadata.labels, f.flags.selector as string));
     if (f.args[0]) pods = pods.filter((p) => p.metadata.name === f.args[0]);
@@ -219,6 +214,7 @@ export function kubectlTop(k: KCtx, argv: string[]): number {
     return 0;
   }
   if (what === 'node' || what === 'nodes' || what === 'no') {
+    authorize(k, 'list', { ...infoOf('Node'), apiVersion: 'metrics.k8s.io/v1beta1' }, undefined);
     const rows = listObjs(k.ks, 'Node').map((n) => {
       const pods = listObjs(k.ks, 'Pod').filter((p) => p.spec.nodeName === n.metadata.name && p.status?.phase === 'Running');
       const u = pods.reduce((a, p) => ({ cpu: a.cpu + usage(p).cpu, mem: a.mem + usage(p).mem }), { cpu: 60, mem: 420 });

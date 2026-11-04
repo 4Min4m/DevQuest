@@ -12,6 +12,8 @@ export interface Request {
   port: number;
   path: string;
   method: string;
+  /** Request headers set with `curl -H`, lower-cased names (e.g. host). */
+  headers?: Record<string, string>;
 }
 
 export type HttpResult = { kind: 'response'; res: HttpResponse } | { kind: 'error'; code: number; message: string };

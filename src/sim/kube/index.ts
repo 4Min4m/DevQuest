@@ -1,6 +1,8 @@
 import type { CommandContext, CommandDef } from '../shell/types';
 import { settle } from './controllers';
 import { KubectlError, kctx } from './cli/common';
+import { impersonate, kubectlAuth, kubectlAutoscale, kubectlCordon, kubectlDrain, kubectlTaint, takeImpersonation } from './cli/admin';
+import { ADMIN } from './rbac';
 import { kubectlDescribe, kubectlGet } from './cli/get';
 import { kubectlApiResources, kubectlClusterInfo, kubectlConfig, kubectlExec, kubectlLogs, kubectlPortForward, kubectlTop, kubectlVersion } from './cli/pods';
 import { kubectlApply, kubectlCreate, kubectlDelete, kubectlEdit, kubectlExpose, kubectlLabel, kubectlRollout, kubectlRun, kubectlScale, kubectlSet } from './cli/workloads';
@@ -27,10 +29,15 @@ Basic Commands (Intermediate):
 Deploy Commands:
   rollout         Manage the rollout of a resource
   scale           Set a new size for a deployment, replica set, or replication controller
+  autoscale       Auto-scale a deployment, replica set, stateful set, or replication controller
 
 Cluster Management Commands:
   cluster-info    Display cluster information
   top             Display resource (CPU/memory) usage
+  cordon          Mark node as unschedulable
+  uncordon        Mark node as schedulable
+  drain           Drain node in preparation for maintenance
+  taint           Update the taints on one or more nodes
 
 Troubleshooting and Debugging Commands:
   describe        Show details of a specific resource or group of resources
@@ -46,6 +53,7 @@ Settings Commands:
   annotate        Update the annotations on a resource
 
 Other Commands:
+  auth            Inspect authorization
   api-resources   Print the supported API resources on the server
   config          Modify kubeconfig files
   version         Print the client and server version information
@@ -54,7 +62,7 @@ Usage:
   kubectl [flags] [options]
 `;
 
-const LATER = new Set(['cordon', 'uncordon', 'drain', 'taint', 'autoscale', 'auth', 'certificate', 'patch', 'replace', 'wait', 'debug', 'attach', 'cp', 'proxy', 'kustomize', 'diff', 'plugin', 'events', 'explain']);
+const LATER = new Set(['certificate', 'patch', 'replace', 'wait', 'debug', 'attach', 'cp', 'proxy', 'kustomize', 'diff', 'plugin', 'events', 'explain']);
 
 export const kubectl: CommandDef = {
   name: 'kubectl',
@@ -83,8 +91,10 @@ export const kubectl: CommandDef = {
   },
 };
 
-function dispatch(ctx: CommandContext, sub: string, args: string[]): number {
-      const k = kctx(ctx);
+function dispatch(ctx: CommandContext, sub: string, rawArgs: string[]): number {
+      const imp = takeImpersonation(rawArgs);
+      const args = imp.args;
+      const k = kctx(ctx, imp.as === null ? ADMIN : impersonate(imp.as, imp.groups));
       switch (sub) {
         case 'get':
           return kubectlGet(k, args);
@@ -128,6 +138,17 @@ function dispatch(ctx: CommandContext, sub: string, args: string[]): number {
           return kubectlClusterInfo(k);
         case 'api-resources':
           return kubectlApiResources(k);
+        case 'cordon':
+        case 'uncordon':
+          return kubectlCordon(k, args, sub === 'cordon');
+        case 'drain':
+          return kubectlDrain(k, args);
+        case 'taint':
+          return kubectlTaint(k, args);
+        case 'autoscale':
+          return kubectlAutoscale(k, args);
+        case 'auth':
+          return kubectlAuth(k, args);
       }
       if (LATER.has(sub)) {
         ctx.err(`devquest: 'kubectl ${sub}' is real, but not simulated yet (it arrives in the next Kubernetes step)\n`);
