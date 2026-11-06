@@ -60,6 +60,14 @@ export interface SimState {
   runner?: { kind: 'github' | 'gitlab'; job: string; host: SimState };
   /** Registry logins on this machine (docker login): registry → user. */
   dockerAuths?: Record<string, string>;
+  /** Packages installed with apt (name → version); undefined = the base image's defaults. */
+  packages?: Record<string, string>;
+  /** False until `apt update` has fetched package lists (fresh cloud images); undefined = fetched. */
+  aptLists?: boolean;
+  /** Other machines on the network (servers managed with ssh / Ansible, EC2 instances), by hostname. */
+  machines?: Record<string, SimState>;
+  /** Set on a managed machine: what reaches it and how. */
+  machine?: { ip: string; publicIp?: string; up: boolean; sshUsers: string[]; ec2?: string; keyFile?: string };
   /** Set when this state is a container's view of the world (docker exec). */
   context?: ContainerContext;
 }

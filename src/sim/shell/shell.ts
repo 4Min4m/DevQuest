@@ -21,7 +21,7 @@ type Sink =
 
 /** Real commands we deliberately don't simulate (yet): say so instead of "not found". */
 const NOT_SIMULATED = new Set([
-  'awk', 'less', 'more', 'su', 'apt', 'apt-get', 'yum', 'ssh', 'scp', 'wget', 'tar', 'gzip',
+  'awk', 'less', 'more', 'su', 'yum', 'scp', 'wget', 'tar', 'gzip',
   'ln', 'stat', 'file', 'htop', 'tr', 'cut', 'xargs', 'diff', 'which', 'man', 'date',
   'python', 'python3', 'make', 'bash', 'sh', 'docker-compose', 'minikube', 'kind', 'k9s',
   'tcpdump', 'strace', 'iostat', 'iotop', 'mpstat', 'pidstat', 'perf', 'iftop', 'nethogs', 'mtr',
@@ -30,6 +30,9 @@ const NOT_SIMULATED = new Set([
 
 /** Commands that don't exist inside containers. */
 const HOST_ONLY = new Set(['docker', 'git', 'kubectl', 'helm', 'gh', 'glab', 'argocd']);
+
+/** Tools installed only on the workstation, not on the servers it manages. */
+const WORKSTATION_ONLY = ['docker', 'kubectl', 'helm', 'gh', 'glab', 'argocd', 'ansible', 'ansible-playbook', 'ansible-inventory', 'ansible-galaxy', 'terraform', 'aws'];
 
 /** Pseudo-PID of the interactive shell (`$$`). */
 const SHELL_PID = 1001;
@@ -70,7 +73,7 @@ export class Shell {
 
   /** A new shell over `state` with the same commands (minus host-only ones inside containers). */
   spawn(state: SimState): Shell {
-    const missing = new Set(state.context ? [...HOST_ONLY, ...state.context.lacks] : []);
+    const missing = new Set(state.context ? [...HOST_ONLY, ...state.context.lacks] : state.machine ? WORKSTATION_ONLY : []);
     const defs = [...this.commands.values()].filter((d) => !missing.has(d.name));
     return new Shell(state, defs);
   }
