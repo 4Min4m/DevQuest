@@ -72,6 +72,26 @@ browser terminal. No backend, no runtime network calls. See [CLAUDE.md](CLAUDE.m
   pipeline design with GitLab CI, deployment strategies, GitOps with Argo CD — with 12 missions, 4
   knowledge checks and 4 boss fights (a silent pipeline, release day, a canary gone wrong, a drifted
   GitOps app).
+- **Step 13 done:** Cloud and infrastructure as code. **Servers:** other simulated Linux machines on the
+  network, reachable with `ssh` (keys, `-i` with real permission checks, known_hosts) and curl, with
+  `apt`/`apt-get` installing packages from an Ubuntu catalog (nginx, apache2, redis, postgresql...)
+  whose services start under systemd. **Ansible:** `ansible`, `ansible-playbook`, `ansible-inventory`
+  with INI/YAML inventories, host patterns, `ansible.cfg`, group_vars/host_vars, a Jinja2 subset,
+  the core modules (apt, copy, template, file, lineinfile, service, user, command, shell, debug,
+  assert, set_fact, stat), loops, `when`, `register`, handlers, roles, blocks, tags, `--check --diff`
+  and the real PLAY/TASK/RECAP output. **Mock AWS** behind one API: the `aws` CLI (credentials,
+  profiles, regions, IAM allow-lists, `--query` JMESPath, json/text/table) for STS, IAM, S3 (website
+  endpoints, public-access block, bucket policies, versioning) and EC2 (VPCs, subnets, internet
+  gateways, route tables, security groups, key pairs, EBS, EIPs, instances that boot real simulated
+  machines from user data and are reachable only when routes and security groups allow it).
+  **Terraform:** an HCL2 parser and evaluator (~60 functions, unknown values), `init` (lock file,
+  local modules, backends), `fmt`, `validate`, `plan` in the real diff format with drift detection,
+  `apply`/`destroy` in dependency order, variables/tfvars/validation, outputs, count/for_each,
+  dynamic blocks, lifecycle, data sources, `state list/show/mv/rm`, `import`, `taint`, local and S3
+  backends with locks and `force-unlock`; providers aws, random, local, null. Four lessons — AWS
+  fundamentals, Terraform basics, Terraform patterns & state, Ansible — with 16 missions, 4
+  knowledge checks and 4 boss fights (an unreachable API, production drift, a stuck state, a
+  failing deploy).
 
 ### Roadmap (from the knowledge vault)
 
@@ -82,7 +102,7 @@ browser terminal. No backend, no runtime network calls. See [CLAUDE.md](CLAUDE.m
 | ~~10~~ | 05 Kubernetes (1) | ✅ done (see above) |
 | ~~11~~ | 05 Kubernetes (2) | ✅ done (see above) |
 | ~~12~~ | 06 CI/CD, GitOps | ✅ done (see above) |
-| 13 | 07 Cloud, 08 IaC | Terraform, Ansible, mock AWS |
+| ~~13~~ | 07 Cloud, 08 IaC | ✅ done (see above) |
 | 14 | 09 Observability, 10 Security | PromQL, logs, alerting, DevSecOps + incident boss fights |
 
 ## Develop
@@ -123,6 +143,13 @@ src/sim/forge/              GitHub/GitLab around the hosted remotes: settings, C
 src/sim/ci/                 pipeline engines (github.ts, gitlab.ts), runner machines, marketplace
                             actions, expressions, gh / glab / npm commands
 src/sim/argocd/             the argocd CLI (the controller lives in src/sim/kube/argocd.ts)
+src/sim/machines/           managed servers (state.machines), apt package catalog, ssh
+src/sim/ansible/            inventory, Jinja2 subset, modules, playbook runner, CLI
+src/sim/aws/                mock AWS account: api.ts (one API for CLI + Terraform), shapes, jmes
+                            (--query), cli.ts (aws), S3 endpoints and EC2 reachability
+src/sim/terraform/          hcl.ts (parser), eval.ts + functions.ts, config.ts (modules, diagnostics),
+                            engine.ts (plan), apply.ts, render.ts (plan output), providers.ts,
+                            state.ts (tfstate, backends, locks), fmt.ts, cli.ts
 src/game/                   mission engine: initial-state builder, validators, MissionSession;
                             progress.ts (XP, levels, streak, hearts, unlocking, skill tree),
                             store.ts (Zustand store persisted to localStorage)
