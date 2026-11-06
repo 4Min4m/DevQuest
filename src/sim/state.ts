@@ -64,6 +64,8 @@ export interface SimState {
   packages?: Record<string, string>;
   /** False until `apt update` has fetched package lists (fresh cloud images); undefined = fetched. */
   aptLists?: boolean;
+  /** Ansible runs from this workstation (newest last), for validators. */
+  ansible?: { runs: { playbook: string; check: boolean; at: number; recap: Record<string, { ok: number; changed: number; unreachable: number; failed: number; skipped: number }> }[] };
   /** Other machines on the network (servers managed with ssh / Ansible, EC2 instances), by hostname. */
   machines?: Record<string, SimState>;
   /** Set on a managed machine: what reaches it and how. */
