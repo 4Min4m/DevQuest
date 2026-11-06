@@ -129,6 +129,15 @@ function checkCheck(c: unknown, where: string, p: Problems): void {
     case 'kubeHttp':
       needs('service');
       break;
+    case 'ciRun':
+      needs('repo');
+      break;
+    case 'registryImage':
+      needs('ref');
+      break;
+    case 'argoApp':
+      needs('name');
+      break;
     case 'kubeVolumeFile':
       needs('claim');
       needs('path');

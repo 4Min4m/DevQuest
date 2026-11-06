@@ -29,7 +29,7 @@ const NOT_SIMULATED = new Set([
 ]);
 
 /** Commands that don't exist inside containers. */
-const HOST_ONLY = new Set(['docker', 'git', 'kubectl', 'helm', 'gh', 'glab']);
+const HOST_ONLY = new Set(['docker', 'git', 'kubectl', 'helm', 'gh', 'glab', 'argocd']);
 
 /** Pseudo-PID of the interactive shell (`$$`). */
 const SHELL_PID = 1001;

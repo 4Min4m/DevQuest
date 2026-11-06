@@ -92,8 +92,12 @@ export interface KCtx {
   id: Identity;
 }
 
+/** CRDs of the cluster kubectl is talking to (resource types they add only exist once installed). */
+let installedCrds: string[] = [];
+
 export function kctx(ctx: CommandContext, id: Identity = ADMIN): KCtx {
   const ks = reconcile(ctx.state);
+  installedCrds = ks.crds ?? [];
   return { ctx, ks, now: ctx.state.clock, out: ctx.out, err: ctx.err, note: ctx.note, id };
 }
 
@@ -123,7 +127,7 @@ export function notFound(r: ResourceInfo, name: string): KubectlError {
 
 export function resolveResource(word: string): ResourceInfo {
   const r = resourceFor(word);
-  if (!r) throw new KubectlError(`error: the server doesn't have a resource type "${word}"`);
+  if (!r || (r.crd && !installedCrds.includes(r.crd))) throw new KubectlError(`error: the server doesn't have a resource type "${word}"`);
   return r;
 }
 

@@ -9,6 +9,7 @@ import { gitCommands } from './git';
 import { kubeCommands, setPodShellFactory } from './kube';
 import { helmCommands } from './helm';
 import { ciCommands, setRunnerShellFactory } from './ci';
+import { argoCommands } from './argocd';
 import { Shell } from './shell/shell';
 import { createInitialState, SimState } from './state';
 
@@ -18,7 +19,7 @@ export type { RunResult, OutputChunk } from './shell/types';
 
 /** A shell with every simulated Linux command and the docker CLI registered. */
 export function createShell(state: SimState = createInitialState()): Shell {
-  return new Shell(state, [...linuxCommands, sudo, ...systemdCommands, ...netCommands, ...perfCommands, ...gitCommands, ...kubeCommands, ...helmCommands, ...ciCommands, ...dockerCommands]);
+  return new Shell(state, [...linuxCommands, sudo, ...systemdCommands, ...netCommands, ...perfCommands, ...gitCommands, ...kubeCommands, ...helmCommands, ...ciCommands, ...argoCommands, ...dockerCommands]);
 }
 
 // Commands inside pods (shell images, kubectl exec) run through the same shell.

@@ -7,6 +7,7 @@ import { admit, AdmissionError } from '../manifest';
 import { clean, kyaml } from '../printers';
 import type { J, KObj } from '../types';
 import { createExtra, CREATE_EXTRA_FLAGS, setCreator } from './admin';
+import { kubectlSetSelector } from './patch';
 import { authorize, findOne, Flags, groupResource, KCtx, KubectlError, listFor, namespaceOf, parseFlags, resolveResource, targets } from './common';
 
 
@@ -648,7 +649,8 @@ export function kubectlSet(k: KCtx, argv: string[]): number {
     }
     return 0;
   }
-  throw new KubectlError(`devquest: kubectl set ${what ?? ''} is not simulated (try image, env, resources)`);
+  if (what === 'selector') return kubectlSetSelector(k, rest);
+  throw new KubectlError(`devquest: kubectl set ${what ?? ''} is not simulated (try image, env, resources, selector)`);
 }
 
 export function kubectlLabel(k: KCtx, argv: string[], annotate = false): number {

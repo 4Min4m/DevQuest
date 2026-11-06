@@ -3,6 +3,7 @@ import { settle } from './controllers';
 import { KubectlError, kctx } from './cli/common';
 import { impersonate, kubectlAuth, kubectlAutoscale, kubectlCordon, kubectlDrain, kubectlTaint, takeImpersonation } from './cli/admin';
 import { ADMIN } from './rbac';
+import { kubectlPatch } from './cli/patch';
 import { runnerClusterAccess } from '../ci/access';
 import { kubectlDescribe, kubectlGet } from './cli/get';
 import { kubectlApiResources, kubectlClusterInfo, kubectlConfig, kubectlExec, kubectlLogs, kubectlPortForward, kubectlTop, kubectlVersion } from './cli/pods';
@@ -63,7 +64,7 @@ Usage:
   kubectl [flags] [options]
 `;
 
-const LATER = new Set(['certificate', 'patch', 'replace', 'wait', 'debug', 'attach', 'cp', 'proxy', 'kustomize', 'diff', 'plugin', 'events', 'explain']);
+const LATER = new Set(['certificate', 'replace', 'wait', 'debug', 'attach', 'cp', 'proxy', 'kustomize', 'diff', 'plugin', 'events', 'explain']);
 
 export const kubectl: CommandDef = {
   name: 'kubectl',
@@ -155,6 +156,8 @@ function dispatch(ctx: CommandContext, sub: string, rawArgs: string[]): number {
           return kubectlAutoscale(k, args);
         case 'auth':
           return kubectlAuth(k, args);
+        case 'patch':
+          return kubectlPatch(k, args);
       }
       if (LATER.has(sub)) {
         ctx.err(`devquest: 'kubectl ${sub}' is real, but not simulated yet (it arrives in the next Kubernetes step)\n`);

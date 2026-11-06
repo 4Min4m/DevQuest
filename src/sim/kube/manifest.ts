@@ -32,6 +32,8 @@ export const KINDS: Record<string, string> = {
   RoleBinding: 'rbac.authorization.k8s.io/v1',
   ClusterRole: 'rbac.authorization.k8s.io/v1',
   ClusterRoleBinding: 'rbac.authorization.k8s.io/v1',
+  Application: 'argoproj.io/v1alpha1',
+  AppProject: 'argoproj.io/v1alpha1',
 };
 
 /** Real kinds DevOps Quest doesn't simulate. */
@@ -153,6 +155,8 @@ const SCHEMAS: Record<string, Schema> = {
   ClusterRole: { apiVersion: ANY, kind: ANY, metadata: META, rules: [{ apiGroups: ANY, resources: ANY, verbs: ANY, resourceNames: ANY, nonResourceURLs: ANY }], aggregationRule: ANY },
   RoleBinding: { apiVersion: ANY, kind: ANY, metadata: META, subjects: ANY, roleRef: ANY },
   ClusterRoleBinding: { apiVersion: ANY, kind: ANY, metadata: META, subjects: ANY, roleRef: ANY },
+  Application: { apiVersion: ANY, kind: ANY, metadata: META, spec: ANY, status: ANY, operation: ANY },
+  AppProject: { apiVersion: ANY, kind: ANY, metadata: META, spec: ANY, status: ANY },
 };
 
 function unknownFields(v: J, schema: Schema | true, path: string, out: string[]): void {
@@ -334,6 +338,11 @@ function validate(o: J): string[] {
           else if (path.backend.service.port?.number === undefined && path.backend.service.port?.name === undefined) errs.push(`${at}.backend.service.port: Invalid value: "": port name or number is required`);
         }
       }
+      break;
+    case 'Application':
+      if (!o.spec?.project) errs.push('spec.project: Required value');
+      if (!o.spec?.destination) errs.push('spec.destination: Required value');
+      if (!o.spec?.source && !o.spec?.sources) errs.push('spec.source: Required value');
       break;
     case 'HorizontalPodAutoscaler':
       if (!o.spec?.scaleTargetRef?.name) errs.push('spec.scaleTargetRef.name: Required value');
@@ -558,6 +567,12 @@ function withDefaults(ks: KubeState, o: J, now: number, existing?: KObj): KObj {
     case 'IngressClass':
       out.spec = o.spec ?? {};
       break;
+    case 'Application':
+    case 'AppProject':
+      out.spec = o.spec ?? {};
+      if (o.operation) out.operation = o.operation;
+      out.status = existing?.status ?? {};
+      break;
     case 'ServiceAccount':
     case 'Role':
     case 'ClusterRole':
@@ -603,6 +618,10 @@ function parseManifest(doc: J, source: string): void {
 export function admit(ks: KubeState, doc: J, now: number, opts: { source: string; mode: 'apply' | 'create' | 'replace'; namespace?: string; lastApplied?: boolean }): Admitted {
   parseManifest(doc, opts.source);
   const kind = doc.kind;
+  const crd = infoOf(kind).crd;
+  if (crd && !(ks.crds ?? []).includes(crd)) {
+    throw new AdmissionError(`error: resource mapping not found for name: "${doc.metadata?.name ?? ''}" namespace: "${doc.metadata?.namespace ?? ''}" from "${opts.source}": no matches for kind "${kind}" in version "${doc.apiVersion}"\nensure CRDs are installed first`);
+  }
   const verb = opts.mode === 'create' ? 'creating' : 'applying patch';
   const unknown: string[] = [];
   unknownFields(doc, SCHEMAS[kind], '', unknown);
@@ -629,6 +648,10 @@ export function admit(ks: KubeState, doc: J, now: number, opts: { source: string
   if (errs.length) {
     const head = `The ${kind} "${o.metadata.name ?? ''}" is invalid: `;
     throw new AdmissionError(errs.length === 1 ? head + errs[0] : head + '\n' + errs.map((e) => `* ${e}`).join('\n'));
+  }
+  if (kind === 'Ingress') {
+    const conflict = ingressConflict(ks, o);
+    if (conflict) throw new AdmissionError(`Error from server (BadRequest): error when ${opts.mode === 'create' ? 'creating' : 'applying patch to'} "${opts.source}": admission webhook "validate.nginx.ingress.kubernetes.io" denied the request: ${conflict}`);
   }
   const existing = getObj(ks, kind, o.metadata.namespace, o.metadata.name);
   if (existing && opts.mode === 'create') {
@@ -723,3 +746,21 @@ function stripJobLabels(t: J): J {
 }
 
 export { iso, uid, templateHash };
+
+/** ingress-nginx's admission webhook: one non-canary Ingress per host + path. */
+function ingressConflict(ks: KubeState, o: J): string | null {
+  const nginx = (i: J) => i.spec?.ingressClassName === 'nginx' || i.metadata?.annotations?.['kubernetes.io/ingress.class'] === 'nginx';
+  const canary = (i: J) => i.metadata?.annotations?.['nginx.ingress.kubernetes.io/canary'] === 'true';
+  if (!nginx(o) || canary(o)) return null;
+  for (const other of listObjs(ks, 'Ingress')) {
+    if (other.metadata.namespace === o.metadata.namespace && other.metadata.name === o.metadata.name) continue;
+    if (!nginx(other) || canary(other)) continue;
+    for (const r of o.spec?.rules ?? []) {
+      for (const p of r.http?.paths ?? []) {
+        const clash = (other.spec?.rules ?? []).some((r2: J) => (r2.host ?? '') === (r.host ?? '') && (r2.http?.paths ?? []).some((p2: J) => (p2.path ?? '/') === (p.path ?? '/')));
+        if (clash) return `host "${r.host ?? '_'}" and path "${p.path ?? '/'}" is already defined in ingress ${other.metadata.namespace}/${other.metadata.name}`;
+      }
+    }
+  }
+  return null;
+}

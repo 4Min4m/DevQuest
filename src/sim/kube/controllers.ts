@@ -4,6 +4,7 @@
  * (image pulls, config, crashes and back-off, OOM, probes), endpoints and GC.
  */
 import type { SimState } from '../state';
+import { argoController } from './argocd';
 import { joinPath, normalize } from '../vfs/path';
 import type { DirNode } from '../vfs/types';
 import { makeDir, Vfs } from '../vfs/vfs';
@@ -1212,6 +1213,7 @@ function tick(host: SimState, ks: KubeState, now: number): void {
   replicaSetStatus(ks);
   deploymentStatus(ks, now);
   endpointsController(ks, now);
+  argoController(host, ks, now);
 }
 
 /** Catch the cluster up to the simulation clock. */

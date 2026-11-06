@@ -165,4 +165,8 @@ export interface KubeState {
   load?: Record<string, number>;
   /** Image references pushed to the registry (full refs); wildcard images (`repo:*`) need one. */
   pushed?: string[];
+  /** Installed CustomResourceDefinitions ("applications.argoproj.io"). */
+  crds?: string[];
+  /** Argo CD's controller cache per Application ("ns/name"). */
+  argo?: Record<string, J>;
 }

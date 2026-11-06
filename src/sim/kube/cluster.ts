@@ -11,6 +11,8 @@ export interface ResourceInfo {
   short: string[];
   apiVersion: string;
   namespaced: boolean;
+  /** Served by a CustomResourceDefinition: only exists once that CRD is installed. */
+  crd?: string;
 }
 
 export const RESOURCES: ResourceInfo[] = [
@@ -40,6 +42,8 @@ export const RESOURCES: ResourceInfo[] = [
   { kind: 'RoleBinding', plural: 'rolebindings', singular: 'rolebinding', short: [], apiVersion: 'rbac.authorization.k8s.io/v1', namespaced: true },
   { kind: 'ClusterRole', plural: 'clusterroles', singular: 'clusterrole', short: [], apiVersion: 'rbac.authorization.k8s.io/v1', namespaced: false },
   { kind: 'ClusterRoleBinding', plural: 'clusterrolebindings', singular: 'clusterrolebinding', short: [], apiVersion: 'rbac.authorization.k8s.io/v1', namespaced: false },
+  { kind: 'Application', plural: 'applications', singular: 'application', short: ['app', 'apps'], apiVersion: 'argoproj.io/v1alpha1', namespaced: true, crd: 'applications.argoproj.io' },
+  { kind: 'AppProject', plural: 'appprojects', singular: 'appproject', short: ['appproj', 'appprojs'], apiVersion: 'argoproj.io/v1alpha1', namespaced: true, crd: 'appprojects.argoproj.io' },
 ];
 
 export function resourceFor(word: string): ResourceInfo | undefined {
@@ -183,6 +187,9 @@ export const K8S_VERSION = 'v1.31.2';
 
 /** Behaviour of the system images the cluster itself runs. */
 export const SYSTEM_IMAGES: Record<string, AppSpec> = {
+  'quay.io/argoproj/argocd:v2.13.1': { listen: [8080, 8081, 8082, 7000, 9001], http: { '/healthz': { body: 'ok' } }, logs: ['time="2026-11-03T09:00:00Z" level=info msg="ArgoCD API Server is starting" built="2024-11-20T17:00:00Z" commit=af54ef8db5adfa77a08d4d05b1e3f2a2a20d8e48 namespace=argocd port=8080 version=v2.13.1+af54ef8'], memMi: 120, cpuM: 6 },
+  'ghcr.io/dexidp/dex:v2.41.1': { listen: [5556, 5557], logs: ['time="2026-11-03T09:00:00Z" level=info msg="listening (http) on 0.0.0.0:5556"'], memMi: 20, cpuM: 1 },
+  'public.ecr.aws/docker/library/redis:7.0.15-alpine': { listen: [6379], logs: ['1:M 03 Nov 2026 09:00:00.000 * Ready to accept connections tcp'], memMi: 8, cpuM: 2 },
   'docker.io/bitnami/nginx:1.27.2-debian-12-r2': {
     listen: [8080],
     portEnv: 'NGINX_HTTP_PORT_NUMBER',

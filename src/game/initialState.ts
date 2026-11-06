@@ -1,4 +1,5 @@
 import { createShell } from '../sim';
+import { installArgo } from '../sim/kube/argocd';
 import { forgeRepo, registryPush } from '../sim/forge';
 import { blobSha, treeFromFlat, writeBlob, writeCommit } from '../sim/git/objects';
 import type { Repo } from '../sim/git/types';
@@ -125,17 +126,27 @@ export function buildInitialState(spec: InitialStateSpec = {}): SimState {
   }
   for (const ref of spec.registryImages ?? []) registryPush(state, ref, blobSha(ref) + blobSha(ref + '!').slice(0, 24));
 
-  if (spec.kubeImages || spec.kubeManifests || spec.kubeLoad) {
+  if (spec.kubeImages || spec.kubeManifests || spec.kubeLoad || spec.argocd) {
     const ks = clusterOf(state);
     Object.assign(ks.images, spec.kubeImages ?? {});
+    if (spec.argocd) installArgo(ks, state.clock);
     if (spec.kubeLoad) ks.load = { ...(ks.load ?? {}), ...spec.kubeLoad };
     reconcile(state);
     for (const doc of parseAllDocuments(spec.kubeManifests ?? '').map((d) => d.toJS()).filter(Boolean)) {
       const r = admit(ks, doc, state.clock, { source: 'mission', mode: 'apply', lastApplied: true });
       if (r.action === 'created') putObj(ks, r.obj);
     }
+    if (spec.argoApps) {
+      // Let Argo CD come up first, then create the Applications.
+      state.clock += 60_000;
+      reconcile(state);
+      for (const doc of parseAllDocuments(spec.argoApps).map((d) => d.toJS()).filter(Boolean)) {
+        const r = admit(ks, doc, state.clock, { source: 'mission', mode: 'apply', lastApplied: true });
+        if (r.action === 'created') putObj(ks, r.obj);
+      }
+    }
     // Without setup commands the cluster still runs for `setupAge` before the learner arrives.
-    if (spec.kubeManifests && !spec.setup?.length) {
+    if ((spec.kubeManifests || spec.argocd) && !spec.setup?.length) {
       state.clock += (spec.setupAge ?? 300) * 1000;
       reconcile(state);
     }

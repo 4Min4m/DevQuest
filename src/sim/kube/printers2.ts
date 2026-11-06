@@ -84,6 +84,8 @@ export function columns2(kind: string, objs: KObj[], now: number, wide: boolean)
         head: ['NAME', 'REFERENCE', 'TARGETS', 'MINPODS', 'MAXPODS', 'REPLICAS', 'AGE'],
         rows: objs.map((o) => r(o, [`${o.spec.scaleTargetRef.kind}/${o.spec.scaleTargetRef.name}`, hpaTargets(o), String(o.spec.minReplicas ?? 1), String(o.spec.maxReplicas), String(o.status?.currentReplicas ?? 0), age(o, now)])),
       };
+    case 'Application':
+      return { head: ['NAME', 'SYNC STATUS', 'HEALTH STATUS'], rows: objs.map((o) => r(o, [o.status?.sync?.status ?? '', o.status?.health?.status ?? ''])) };
     case 'ServiceAccount':
       return { head: ['NAME', 'SECRETS', 'AGE'], rows: objs.map((o) => r(o, [String((o.secrets ?? []).length), age(o, now)])) };
     case 'Role':

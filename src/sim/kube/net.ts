@@ -81,8 +81,43 @@ function pathMatches(p: J, path: string): number {
 }
 
 /** Which backend an nginx-class Ingress sends `host` + `path` to (longest match wins; host rules beat catch-all rules). */
-export function ingressRoute(ks: KubeState, host: string, path: string): { ing: KObj; backend: J; upstreamPath: string } | null {
-  const ings = listObjs(ks, 'Ingress').filter(isNginxClass);
+const CANARY = 'nginx.ingress.kubernetes.io/canary';
+const isCanary = (ing: KObj) => ing.metadata.annotations?.[CANARY] === 'true';
+/** Requests seen per canary Ingress, so weights spread deterministically (20% = 2 of every 10). */
+const canaryCount = new Map<string, number>();
+
+/** Does a canary Ingress take this request (header / cookie rules first, then the weight)? */
+function canaryTakes(ing: KObj, headers: Record<string, string>, silent: boolean): boolean {
+  const a = ing.metadata.annotations ?? {};
+  const header = a['nginx.ingress.kubernetes.io/canary-by-header']?.toLowerCase();
+  if (header && headers[header] !== undefined) {
+    const want = a['nginx.ingress.kubernetes.io/canary-by-header-value'];
+    const got = headers[header];
+    if (want !== undefined) {
+      if (got === want) return true;
+    } else if (got === 'always') return true;
+    else if (got === 'never') return false;
+  }
+  const cookie = a['nginx.ingress.kubernetes.io/canary-by-cookie'];
+  if (cookie && headers.cookie) {
+    const v = headers.cookie.split(';').map((x) => x.trim().split('=')).find(([k]) => k === cookie)?.[1];
+    if (v === 'always') return true;
+    if (v === 'never') return false;
+  }
+  const total = Number(a['nginx.ingress.kubernetes.io/canary-weight-total'] ?? 100);
+  const weight = Math.max(0, Math.min(total, Number(a['nginx.ingress.kubernetes.io/canary-weight'] ?? 0)));
+  if (weight <= 0) return false;
+  if (weight >= total) return true;
+  if (silent) return false;
+  const key = `${ing.metadata.namespace}/${ing.metadata.name}`;
+  const n = canaryCount.get(key) ?? 0;
+  canaryCount.set(key, n + 1);
+  return Math.floor(((n + 1) * weight) / total) > Math.floor((n * weight) / total);
+}
+
+export function ingressRoute(ks: KubeState, host: string, path: string, headers: Record<string, string> = {}, silent = true): { ing: KObj; backend: J; upstreamPath: string; canary?: boolean } | null {
+  const all = listObjs(ks, 'Ingress').filter(isNginxClass);
+  const ings = all.filter((i) => !isCanary(i));
   const specific = ings.flatMap((ing) => (ing.spec.rules ?? []).filter((r: J) => r.host && hostMatches(r.host, host)).map((r: J) => ({ ing, r })));
   const pool = specific.length ? specific : ings.flatMap((ing) => (ing.spec.rules ?? []).filter((r: J) => !r.host).map((r: J) => ({ ing, r })));
   let best: { ing: KObj; p: J; score: number } | null = null;
@@ -110,6 +145,13 @@ export function ingressRoute(ks: KubeState, host: string, path: string): { ing: 
     } else upstreamPath = target;
     if (!upstreamPath.startsWith('/')) upstreamPath = '/' + upstreamPath;
   }
+  // A canary Ingress for the same host and path can take the request instead.
+  const stablePath = best.p.path ?? '/';
+  const ruleHost = (best.ing.spec.rules ?? []).find((r: J) => (r.http?.paths ?? []).includes(best!.p))?.host;
+  for (const c of all.filter(isCanary)) {
+    const cp = (c.spec.rules ?? []).filter((r: J) => (r.host ?? '') === (ruleHost ?? '')).flatMap((r: J) => r.http?.paths ?? []).find((p: J) => (p.path ?? '/') === stablePath);
+    if (cp && canaryTakes(c, headers, silent)) return { ing: c, backend: cp.backend, upstreamPath, canary: true };
+  }
   return { ing: best.ing, backend: best.p.backend, upstreamPath };
 }
 
@@ -121,7 +163,7 @@ function viaIngress(ks: KubeState, req: Request, now: number, silent: boolean): 
   const ctrl = controllerPod(ks);
   if (!ctrl) return { kind: 'error', code: 7, message: `Failed to connect to ${req.host} port ${req.port} after 0 ms: Couldn't connect to server` };
   const hostHeader = (req.headers?.host ?? req.host).replace(/:\d+$/, '').toLowerCase();
-  const route = ingressRoute(ks, hostHeader, req.path || '/');
+  const route = ingressRoute(ks, hostHeader, req.path || '/', req.headers ?? {}, silent);
   if (!route?.backend?.service) return nginxPage(404, 'Not Found');
   const svc = getObj(ks, 'Service', route.ing.metadata.namespace, route.backend.service.name);
   if (!svc) return nginxPage(503, 'Service Temporarily Unavailable');
@@ -138,8 +180,9 @@ function viaIngress(ks: KubeState, req: Request, now: number, silent: boolean): 
 }
 
 /** A request to the ingress controller with this Host header (for validators). */
-export function ingressRequest(ks: KubeState, host: string, path: string, now: number): HttpResult {
-  return viaIngress(ks, { key: `http://${host}${path}`, host: 'localhost', port: 80, path, method: 'GET', headers: { host } }, now, true);
+export function ingressRequest(ks: KubeState, host: string, path: string, now: number, headers: Record<string, string> = {}): HttpResult {
+  const h = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
+  return viaIngress(ks, { key: `http://${host}${path}`, host: 'localhost', port: 80, path, method: 'GET', headers: { ...h, host } }, now, true);
 }
 
 // ------------------------------------------------------------------ provider

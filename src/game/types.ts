@@ -208,7 +208,17 @@ export type Check = CheckBase &
         blocked?: boolean;
       }
     /** A request through the ingress-nginx controller for this Host (and path) returns `status` (default: < 400) / contains text. */
-    | { type: 'kubeIngress'; host: string; path?: string; status?: number; contains?: string }
+    | { type: 'kubeIngress'; host: string; path?: string; status?: number; contains?: string; headers?: Record<string, string> }
+    /**
+     * The latest CI run (GitHub Actions workflow or GitLab pipeline) on a hosted repo, filtered by
+     * workflow / branch / event: its conclusion, a job's result. By default it must be for the
+     * branch's current head commit and finished.
+     */
+    | { type: 'ciRun'; repo: string; workflow?: string; branch?: string; event?: string; status?: string; job?: string; jobStatus?: string; anyCommit?: boolean; minRuns?: number }
+    /** An image in the registry; `{sha}` / `{short}` / `{short8}` in `ref` stand for the head commit of `repo` (`branch`, default main). */
+    | { type: 'registryImage'; ref: string; repo?: string; branch?: string; exists?: boolean }
+    /** An Argo CD Application's sync / health status; `atHead` = synced to the current head of its repo's branch. */
+    | { type: 'argoApp'; name: string; namespace?: string; sync?: string; health?: string; atHead?: string; automated?: boolean; prune?: boolean; selfHeal?: boolean; exists?: boolean }
     /** A file inside the volume bound to a PersistentVolumeClaim (data that outlives pods). */
     | { type: 'kubeVolumeFile'; claim: string; namespace?: string; path: string; contains?: string }
     /** RBAC: `kubectl auth can-i VERB RESOURCE --as AS [-n NS]` answers `allowed`. */
@@ -289,6 +299,10 @@ export interface InitialStateSpec {
   projects?: Record<string, ProjectSpec>;
   /** Image references already in the registry (e.g. pushed by earlier CI runs). */
   registryImages?: string[];
+  /** Install Argo CD into the cluster (namespace argocd, Application CRDs). */
+  argocd?: boolean;
+  /** Argo CD Applications to create once it is installed (YAML). */
+  argoApps?: string;
   /** Mission-defined container images in the cluster registry, by reference. */
   kubeImages?: Record<string, AppSpec>;
   /** YAML applied to the cluster before setup (hidden from the learner). */

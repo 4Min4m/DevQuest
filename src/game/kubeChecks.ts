@@ -10,9 +10,9 @@ import type { SimState } from '../sim/state';
 import { Vfs } from '../sim/vfs/vfs';
 import type { Check } from './types';
 
-export type KubeCheck = Extract<Check, { type: 'kubeResource' | 'kubePods' | 'kubeRollout' | 'kubeEndpoints' | 'kubeHttp' | 'kubeIngress' | 'kubeCanI' | 'helmRelease' | 'kubeVolumeFile' }>;
+export type KubeCheck = Extract<Check, { type: 'kubeResource' | 'kubePods' | 'kubeRollout' | 'kubeEndpoints' | 'kubeHttp' | 'kubeIngress' | 'kubeCanI' | 'helmRelease' | 'kubeVolumeFile' | 'argoApp' }>;
 
-export const KUBE_CHECK_TYPES = ['kubeResource', 'kubePods', 'kubeRollout', 'kubeEndpoints', 'kubeHttp', 'kubeIngress', 'kubeCanI', 'helmRelease', 'kubeVolumeFile'] as const;
+export const KUBE_CHECK_TYPES = ['kubeResource', 'kubePods', 'kubeRollout', 'kubeEndpoints', 'kubeHttp', 'kubeIngress', 'kubeCanI', 'helmRelease', 'kubeVolumeFile', 'argoApp'] as const;
 
 const ns = (c: { namespace?: string }) => c.namespace ?? 'default';
 
@@ -82,10 +82,29 @@ export function evaluateKube(check: KubeCheck, state: SimState): boolean {
       return check.blocked ? r.kind === 'error' : ok;
     }
     case 'kubeIngress': {
-      const r = ingressRequest(ks, check.host, check.path ?? '/', state.clock);
+      const r = ingressRequest(ks, check.host, check.path ?? '/', state.clock, check.headers ?? {});
       if (r.kind !== 'response') return false;
       if (check.status !== undefined ? r.res.status !== check.status : r.res.status >= 400) return false;
       return check.contains === undefined || r.res.body.includes(check.contains);
+    }
+    case 'argoApp': {
+      const app = getObj(ks, 'Application', check.namespace ?? 'argocd', check.name);
+      if (check.exists === false) return !app;
+      if (!app) return false;
+      const st = app.status ?? {};
+      if (check.sync !== undefined && st.sync?.status !== check.sync) return false;
+      if (check.health !== undefined && st.health?.status !== check.health) return false;
+      const auto = app.spec.syncPolicy?.automated;
+      if (check.automated !== undefined && !!auto !== check.automated) return false;
+      if (check.prune !== undefined && !!auto?.prune !== check.prune) return false;
+      if (check.selfHeal !== undefined && !!auto?.selfHeal !== check.selfHeal) return false;
+      if (check.atHead !== undefined) {
+        const remotes = state.git?.remotes ?? {};
+        const url = Object.keys(remotes).find((u) => u.replace(/\.git$/, '') === String(app.spec.source?.repoURL ?? '').replace(/\.git$/, ''));
+        const head = url ? remotes[url].heads[check.atHead] : undefined;
+        if (!head || st.sync?.revision !== head || st.sync?.status !== 'Synced') return false;
+      }
+      return true;
     }
     case 'kubeVolumeFile': {
       const pvc = getObj(ks, 'PersistentVolumeClaim', ns(check), check.claim);
@@ -138,6 +157,9 @@ export function describeKube(check: KubeCheck): string {
       return `service \`${check.service}\` should answer HTTP${check.fromSelector ? ` from \`${check.fromSelector}\` pods` : ''}${check.contains ? ` with \`${check.contains}\`` : ''}`;
     case 'kubeIngress':
       return `http://${check.host}${check.path ?? '/'} via the ingress controller should ${check.status ? `return ${check.status}` : 'answer'}${check.contains ? ` with \`${check.contains}\`` : ''}`;
+    case 'argoApp':
+      if (check.exists === false) return `Argo CD application \`${check.name}\` should be deleted`;
+      return `Argo CD application \`${check.name}\` should be ${[check.sync, check.health].filter(Boolean).join(' and ') || 'configured'}${check.atHead ? ` at the head of ${check.atHead}` : ''}${check.automated ? ' with automated sync' : ''}${check.prune ? ' (prune)' : ''}${check.selfHeal ? ' (self-heal)' : ''}`;
     case 'kubeVolumeFile':
       return `the \`${check.claim}\` volume should hold \`${check.path}\`${check.contains ? ` containing \`${check.contains}\`` : ''}`;
     case 'kubeCanI':
