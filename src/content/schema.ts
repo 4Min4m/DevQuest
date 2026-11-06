@@ -6,7 +6,7 @@ const BRANCHES = [
   'linux-basics', 'files-permissions', 'processes', 'text-processing', 'docker-basics',
   'images-dockerfile', 'volumes-networks', 'compose', 'troubleshooting',
   'systemd', 'network-tools', 'performance',
-  'version-control', 'git-branching', 'git-remotes', 'kubernetes', 'k8s-networking', 'k8s-troubleshooting', 'k8s-storage', 'k8s-scheduling', 'k8s-traffic', 'k8s-rbac-helm', 'cicd', 'cloud-iac', 'observability', 'security',
+  'version-control', 'git-branching', 'git-remotes', 'kubernetes', 'k8s-networking', 'k8s-troubleshooting', 'k8s-storage', 'k8s-scheduling', 'k8s-traffic', 'k8s-rbac-helm', 'cicd', 'cicd-gitlab', 'deploy-strategies', 'gitops', 'cloud-iac', 'observability', 'security',
 ];
 
 /** Collects every problem in a lesson file, so authors see them all at once. */

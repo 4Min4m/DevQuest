@@ -1,0 +1,558 @@
+id: pipeline-design-gitlab
+title: Pipeline design with GitLab CI
+branch: cicd-gitlab
+prerequisites: [ci-github-actions]
+sources:
+  - 06-CI-CD/02-Pipeline-Design
+  - 06-CI-CD/04-GitLab-CI
+theory: |
+  GitLab pipelines live in `.gitlab-ci.yml`. **Stages** run in order; jobs in the same stage run in
+  parallel; a failed job stops later stages (they show as *skipped*):
+
+  ```yaml
+  stages: [build, test, deploy]
+  variables:
+    IMAGE: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA     # predefined variables
+  build:
+    stage: build
+    script: [npm ci, npm run build]
+    artifacts:
+      paths: [dist/]                 # hand files to LATER stages of this pipeline
+    cache:
+      paths: [node_modules/]         # speed up FUTURE pipelines (best effort)
+  deploy_production:
+    stage: deploy
+    script: [kubectl set image deployment/web web=$IMAGE]
+    environment: production
+    rules:
+      - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+        when: manual                 # a human presses "play" (glab ci trigger)
+  ```
+
+  **Pipeline design rules of thumb**
+
+  | Rule | Why |
+  |---|---|
+  | Fail fast: lint → unit tests → build → slow tests | the cheapest checks catch most mistakes in seconds |
+  | **Build once, deploy many** | the image tested in staging is the exact one in production (tag = commit SHA) |
+  | Artifacts ≠ cache | artifacts are guaranteed within a pipeline; cache is a speed-up that may be missing |
+  | Gate production | auto to staging, manual (or approval) to prod = continuous **delivery** |
+  | Secrets in CI/CD variables | masked, and *protected* ones only on protected branches |
+
+  Every job runs in a fresh container on a **runner**; `tags:` pick runners — a tag no runner has means
+  the job waits forever ("stuck"). From the terminal: `glab ci status [--live]` ·
+  `glab ci trace JOB` · `glab ci trigger JOB` · `glab ci retry JOB` · `glab ci lint`.
+missions:
+  - id: gl-artifacts
+    title: The test stage can't see the build
+    type: guided
+    prompt: |
+      `~/web` is a clone of **gitlab.com/acme/web**. Its pipeline builds `dist/` in the `build` stage and
+      checks it in `test` — and the check fails every time.
+
+      **Find out why, fix `.gitlab-ci.yml`, and get a green pipeline on `main`.**
+    initialState:
+      gitHosted:
+        - url: https://gitlab.com/acme/web.git
+          message: Initial web
+          files:
+            package.json: |
+              {
+                "name": "web",
+                "version": "1.0.0",
+                "scripts": { "test": "jest", "build": "vite build" }
+              }
+            package-lock.json: |
+              { "name": "web", "lockfileVersion": 3 }
+            src/main.js: |
+              document.querySelector('#app').textContent = 'Acme web';
+            .gitlab-ci.yml: |
+              stages: [build, test]
+
+              build:
+                stage: build
+                image: node:20-alpine
+                script:
+                  - npm ci
+                  - npm run build
+
+              smoke-test:
+                stage: test
+                image: node:20-alpine
+                script:
+                  - test -f dist/index.html
+                  - echo "dist/index.html is there"
+      setup:
+        - git clone -q https://gitlab.com/acme/web.git
+        - cd web
+        - "echo '# Acme web' > README.md"
+        - git add README.md
+        - git commit -qm "Add README"
+        - git push -q
+      cwd: /home/student/web
+    hints:
+      - text: "`glab ci status` shows which job failed; `glab ci trace smoke-test` shows its log."
+        cost: 5
+      - text: "Every job starts in a fresh container. `dist/` only travels to later stages as an **artifact** of the job that made it."
+        cost: 5
+      - text: "`sed -i 's#^    - npm run build#    - npm run build\\n  artifacts:\\n    paths:\\n      - dist/#' .gitlab-ci.yml`, `glab ci lint`, commit, push, `glab ci status --live`."
+        cost: 10
+    validator:
+      checks:
+        - type: gitRemote
+          url: https://gitlab.com/acme/web.git
+          file: .gitlab-ci.yml
+          regex: "artifacts:"
+        - type: ciRun
+          repo: https://gitlab.com/acme/web.git
+          branch: main
+          status: success
+    xp: 60
+    par: 8
+    solution:
+      - glab ci status
+      - glab ci trace smoke-test
+      - "sed -i 's#^    - npm run build#    - npm run build\\n  artifacts:\\n    paths:\\n      - dist/#' .gitlab-ci.yml"
+      - glab ci lint
+      - git commit -qam "Pass dist/ to the test stage"
+      - git push -q
+      - glab ci status --live
+    explain: |
+      The build worked — and its output vanished with its container. `artifacts:` uploads files at the end
+      of a job, and every job in a later stage downloads them first ("Downloading artifacts for build").
+      A `cache:` would *not* have been reliable here: caches are for speed, artifacts are for passing
+      results along.
+
+  - id: gl-manual-gate
+    title: A human presses deploy
+    type: guided
+    prompt: |
+      Every push to `main` of **acme/web** goes straight to production (continuous **deployment**). The
+      team wants continuous **delivery**: staging updates automatically, production waits for a human.
+
+      **Make `deploy_production` a manual job, push, check staging, then release the same build to
+      production yourself.** (The pipeline's KUBECONFIG is already a CI/CD variable.)
+    initialState:
+      gitHosted:
+        - url: https://gitlab.com/acme/web.git
+          message: Initial web
+          files:
+            package.json: |
+              {
+                "name": "web",
+                "version": "1.0.0",
+                "scripts": { "test": "jest", "build": "vite build" }
+              }
+            package-lock.json: |
+              { "name": "web", "lockfileVersion": 3 }
+            Dockerfile: |
+              FROM nginx:1.27-alpine
+              COPY dist/ /usr/share/nginx/html/
+            .gitlab-ci.yml: |
+              stages: [build, package, deploy]
+
+              variables:
+                IMAGE: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
+
+              build:
+                stage: build
+                image: node:20-alpine
+                script:
+                  - npm ci
+                  - npm run build
+                artifacts:
+                  paths:
+                    - dist/
+
+              docker:
+                stage: package
+                image: docker:27
+                services: [docker:27-dind]
+                script:
+                  - echo "$CI_REGISTRY_PASSWORD" | docker login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin
+                  - docker build -t $IMAGE .
+                  - docker push $IMAGE
+
+              deploy_staging:
+                stage: deploy
+                image: bitnami/kubectl:1.31
+                script:
+                  - kubectl set image deployment/web web=$IMAGE -n staging
+                environment: staging
+
+              deploy_production:
+                stage: deploy
+                image: bitnami/kubectl:1.31
+                script:
+                  - kubectl set image deployment/web web=$IMAGE -n production
+                environment: production
+      forge:
+        https://gitlab.com/acme/web.git:
+          variables:
+            KUBECONFIG: { value: "apiVersion: v1\nkind: Config\nclusters:\n- name: prod\n", file: true, protected: true }
+      registryImages: [registry.gitlab.com/acme/web:1.0.0]
+      kubeImages:
+        "registry.gitlab.com/acme/web:*":
+          listen: [80]
+          http: { "/": { body: "acme web {tag}\n" } }
+      kubeManifests: |
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: staging
+        ---
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: production
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: web
+          namespace: staging
+          labels: { app: web }
+        spec:
+          replicas: 1
+          selector:
+            matchLabels: { app: web }
+          template:
+            metadata:
+              labels: { app: web }
+            spec:
+              containers:
+              - name: web
+                image: registry.gitlab.com/acme/web:1.0.0
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: web
+          namespace: production
+          labels: { app: web }
+        spec:
+          replicas: 2
+          selector:
+            matchLabels: { app: web }
+          template:
+            metadata:
+              labels: { app: web }
+            spec:
+              containers:
+              - name: web
+                image: registry.gitlab.com/acme/web:1.0.0
+      setup:
+        - git clone -q https://gitlab.com/acme/web.git
+      cwd: /home/student/web
+    hints:
+      - text: "Add `when: manual` to `deploy_production`: `sed -i 's/^  environment: production/  environment: production\\n  when: manual/' .gitlab-ci.yml`."
+        cost: 5
+      - text: "After pushing, `glab ci status --live`: staging deploys, production shows `(manual)`. `kubectl get deploy -A -o wide | grep web` shows the images."
+        cost: 5
+      - text: "`glab ci trigger deploy_production`, then `glab ci status --live` and `kubectl rollout status deployment/web -n production`."
+        cost: 10
+    validator:
+      checks:
+        - type: gitRemote
+          url: https://gitlab.com/acme/web.git
+          file: .gitlab-ci.yml
+          regex: "when: manual"
+        - type: ciRun
+          repo: https://gitlab.com/acme/web.git
+          branch: main
+          job: deploy_production
+          jobStatus: success
+        - type: kubeResource
+          kind: Deployment
+          name: web
+          namespace: production
+          path: spec.template.spec.containers.0.image
+          regex: '^registry\.gitlab\.com/acme/web:[0-9a-f]{8}$'
+        - type: kubeRollout
+          name: web
+          namespace: production
+    xp: 70
+    par: 9
+    solution:
+      - "sed -i 's/^  environment: production/  environment: production\\n  when: manual/' .gitlab-ci.yml"
+      - git commit -qam "Gate production behind a manual job"
+      - git push -q
+      - glab ci status --live
+      - kubectl get deployments -A -o wide
+      - glab ci trigger deploy_production
+      - glab ci status --live
+      - kubectl rollout status deployment/web -n production
+    explain: |
+      The image was built **once** (`registry.gitlab.com/acme/web:<short sha>`) and that exact artifact
+      went to staging and then to production — no rebuild, no "works in staging" surprises. A manual job
+      is GitLab's simplest gate; protected environments with required approvals are the grown-up version.
+
+  - id: gl-rules
+    title: Feature branches must not deploy
+    type: guided
+    prompt: |
+      A teammate's half-finished feature branch just overwrote **staging**: the `deploy_staging` job runs
+      for **every** branch.
+
+      **Make it run only on the default branch, push that to `main`, then push a feature branch
+      `feature/banner` and confirm its pipeline has no deploy job.**
+    initialState:
+      gitHosted:
+        - url: https://gitlab.com/acme/web.git
+          message: Initial web
+          files:
+            package.json: |
+              {
+                "name": "web",
+                "version": "1.0.0",
+                "scripts": { "test": "jest", "build": "vite build" }
+              }
+            package-lock.json: |
+              { "name": "web", "lockfileVersion": 3 }
+            .gitlab-ci.yml: |
+              stages: [build, deploy]
+
+              build:
+                stage: build
+                image: node:20-alpine
+                script:
+                  - npm ci
+                  - npm run build
+                artifacts:
+                  paths: [dist/]
+
+              deploy_staging:
+                stage: deploy
+                script:
+                  - echo "Deploying $CI_COMMIT_SHORT_SHA from $CI_COMMIT_BRANCH to staging"
+                environment: staging
+      setup:
+        - git clone -q https://gitlab.com/acme/web.git
+      cwd: /home/student/web
+    hints:
+      - text: "`rules:` with `if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH` — a job whose rules don't match isn't added to the pipeline at all."
+        cost: 5
+      - text: "`sed -i 's/^  environment: staging/  environment: staging\\n  rules:\\n    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH/' .gitlab-ci.yml`"
+        cost: 10
+      - text: "Then `git switch -c feature/banner`, commit something, `git push -u origin feature/banner`, `glab ci status --live`."
+        cost: 5
+    validator:
+      checks:
+        - type: ciRun
+          repo: https://gitlab.com/acme/web.git
+          branch: main
+          job: deploy_staging
+          jobStatus: success
+        - type: ciRun
+          repo: https://gitlab.com/acme/web.git
+          branch: feature/banner
+          status: success
+        - type: ciRun
+          repo: https://gitlab.com/acme/web.git
+          branch: feature/banner
+          job: deploy_staging
+          jobStatus: absent
+    xp: 60
+    par: 12
+    solution:
+      - "sed -i 's/^  environment: staging/  environment: staging\\n  rules:\\n    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH/' .gitlab-ci.yml"
+      - glab ci lint
+      - git commit -qam "Deploy to staging from main only"
+      - git push -q
+      - glab ci status --live
+      - git switch -c feature/banner
+      - "echo '<p>New banner</p>' > banner.html"
+      - git add banner.html
+      - git commit -qm "Add banner"
+      - git push -q -u origin feature/banner
+      - glab ci status --live
+    explain: |
+      Rules decide whether a job is **in** the pipeline, not whether it succeeds — the feature pipeline
+      simply has no deploy job. `$CI_DEFAULT_BRANCH` beats hard-coding `main`, and protected CI/CD
+      variables (like the real kubeconfig) are only given to pipelines on protected branches anyway — a
+      second line of defence.
+
+  - id: pipeline-design-check
+    title: "Knowledge check: pipeline design"
+    type: quiz
+    prompt: Fast, safe, repeatable pipelines.
+    xp: 30
+    questions:
+      - kind: order
+        prompt: Put these jobs in a fail-fast order.
+        items:
+          - lint (20 s)
+          - unit tests (2 min)
+          - build the image (3 min)
+          - integration tests (8 min)
+          - deploy to staging
+      - kind: single
+        prompt: "`build` makes `dist/`; `test` in the next stage needs it. What do you use?"
+        options: [cache, artifacts, a variable, a service]
+        answer: 1
+      - kind: single
+        prompt: What does "build once, deploy many" mean?
+        options:
+          - Build a separate image per environment with its own settings
+          - The same immutable artifact (e.g. image tag = commit SHA) is promoted from staging to production
+          - Only build on Mondays
+          - Deploy the same build to many clusters at once
+        answer: 1
+      - kind: single
+        prompt: 'A job with `tags: [gpu]` has been "pending" for an hour. Most likely cause?'
+        options:
+          - The script is slow
+          - No runner with the gpu tag is available
+          - The job is manual
+          - The artifacts expired
+        answer: 1
+      - kind: single
+        prompt: Which job setting gives you continuous delivery instead of continuous deployment?
+        options: ["when: manual on the production job", "allow_failure: true", "cache:", "needs: []"]
+        answer: 0
+
+  - id: boss-release-day
+    title: "Boss: release day"
+    type: boss
+    prompt: |
+      🚀 It's release day for **acme/web** and nothing reaches **staging**. The release engineer's last
+      words: "the pipeline has been pending for an hour, and yesterday it deployed but the site never
+      updated". Your clone is `~/web`.
+
+      **Get a green pipeline on `main` and staging running the image it built.**
+    initialState:
+      gitHosted:
+        - url: https://gitlab.com/acme/web.git
+          message: Initial web
+          files:
+            package.json: |
+              {
+                "name": "web",
+                "version": "1.4.0",
+                "scripts": { "test": "jest", "build": "vite build" }
+              }
+            package-lock.json: |
+              { "name": "web", "lockfileVersion": 3 }
+            Dockerfile: |
+              FROM nginx:1.27-alpine
+              COPY dist/ /usr/share/nginx/html/
+            .gitlab-ci.yml: |
+              stages: [build, test, package, deploy]
+
+              build:
+                stage: build
+                image: node:20-alpine
+                script:
+                  - npm ci
+                  - npm run build
+                artifacts:
+                  paths: [dist/]
+
+              test:
+                stage: test
+                image: node:20-alpine
+                tags: [gpu]
+                script:
+                  - npm ci
+                  - npm test
+
+              docker:
+                stage: package
+                image: docker:27
+                services: [docker:27-dind]
+                script:
+                  - echo "$CI_REGISTRY_PASSWORD" | docker login $CI_REGISTRY -u $CI_REGISTRY_USER --password-stdin
+                  - docker build -t $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA .
+                  - docker push $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
+
+              deploy_staging:
+                stage: deploy
+                image: bitnami/kubectl:1.31
+                script:
+                  - kubectl set image deployment/web web=$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA -n staging
+                  - kubectl rollout status deployment/web -n staging --timeout=60s
+                environment: staging
+                rules:
+                  - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      forge:
+        https://gitlab.com/acme/web.git:
+          variables:
+            KUBECONFIG: { value: "apiVersion: v1\nkind: Config\n", file: true, protected: true }
+      projects:
+        web:
+          tests:
+            - { suite: src/app.test.js, name: "web › renders", file: package.json, regex: "web", failure: "" }
+      registryImages: [registry.gitlab.com/acme/web:1.3.0]
+      kubeImages:
+        "registry.gitlab.com/acme/web:*":
+          listen: [80]
+          http: { "/": { body: "acme web {tag}\n" } }
+      kubeManifests: |
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: staging
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: web
+          namespace: staging
+          labels: { app: web }
+        spec:
+          replicas: 2
+          selector:
+            matchLabels: { app: web }
+          template:
+            metadata:
+              labels: { app: web }
+            spec:
+              containers:
+              - name: web
+                image: registry.gitlab.com/acme/web:1.3.0
+      setup:
+        - git clone -q https://gitlab.com/acme/web.git
+        - cd web
+        - "echo '# Acme web 1.4' > README.md"
+        - git add README.md
+        - git commit -qm "Release 1.4"
+        - git push -q
+      cwd: /home/student/web
+      setupAge: 3600
+    hints: []
+    validator:
+      checks:
+        - type: ciRun
+          repo: https://gitlab.com/acme/web.git
+          branch: main
+          status: success
+        - type: kubeRollout
+          name: web
+          namespace: staging
+        - type: kubeResource
+          kind: Deployment
+          name: web
+          namespace: staging
+          path: spec.template.spec.containers.0.image
+          regex: '^registry\.gitlab\.com/acme/web:[0-9a-f]{8}$'
+    xp: 200
+    par: 14
+    solution:
+      - glab ci status
+      - "sed -i '/tags: \\[gpu\\]/d' .gitlab-ci.yml"
+      - git commit -qam "Run tests on the shared runners"
+      - git push -q
+      - glab ci status --live
+      - glab ci trace deploy_staging
+      - kubectl get pods -n staging
+      - "sed -i 's/web=$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA /web=$CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA /' .gitlab-ci.yml"
+      - git commit -qam "Deploy the tag we actually pushed"
+      - git push -q
+      - glab ci status --live
+      - kubectl rollout status deployment/web -n staging
+    explain: |
+      Layer one: `tags: [gpu]` sent the test job to a runner that doesn't exist, so the pipeline was
+      **stuck** — not failed, just waiting forever. Layer two: the image was pushed as
+      `:$CI_COMMIT_SHORT_SHA` but deployed as `:$CI_COMMIT_SHA` — a tag nobody ever pushed, so the new pods
+      sat in `ImagePullBackOff` while the old ones kept serving. The `rollout status --timeout` line is
+      what turned that silent failure into a red pipeline.

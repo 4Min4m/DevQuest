@@ -690,6 +690,14 @@ function revisions(k: KCtx, d: KObj): { rev: number; rs: KObj }[] {
     .sort((a, b) => a.rev - b.rev);
 }
 
+/** --timeout=90s / 2m / 0 (wait forever, which here means our 2-minute cap). */
+function timeoutSecs(v: string | true | undefined): number | undefined {
+  if (typeof v !== 'string' || v === '0') return undefined;
+  let secs = 0;
+  for (const [, n, u] of v.matchAll(/(\d+)(h|m|s)?/g)) secs += Number(n) * (u === 'h' ? 3600 : u === 'm' ? 60 : 1);
+  return secs || undefined;
+}
+
 function stsRolloutStatus(k: KCtx, ns: string, name: string): number {
   let last = '';
   for (let i = 0; i <= 180; i++) {
@@ -750,7 +758,8 @@ export function kubectlRollout(k: KCtx, argv: string[]): number {
       }
       if (d.kind === 'StatefulSet') return stsRolloutStatus(k, ns, d.metadata.name);
       let last = '';
-      for (let i = 0; i <= 120; i++) {
+      const limit = timeoutSecs(f.flags.timeout);
+      for (let i = 0; i <= (limit ?? 120); i++) {
         const cur = getObj(k.ks, 'Deployment', ns, d.metadata.name);
         if (!cur) throw new KubectlError(`error: deployment "${d.metadata.name}" not found`);
         const st = rolloutState(cur);
@@ -765,6 +774,7 @@ export function kubectlRollout(k: KCtx, argv: string[]): number {
         }
         advance(k.ctx.state, 1000);
       }
+      if (limit !== undefined) throw new KubectlError('error: timed out waiting for the condition');
       k.note('devquest: stopped waiting after 2 minutes. A real `rollout status` keeps waiting until the progress deadline (10 minutes) — something is blocking this rollout; check `kubectl get pods` and `kubectl describe`.\n');
       return 1;
     }

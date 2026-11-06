@@ -1,0 +1,523 @@
+id: gitops-argocd
+title: GitOps with Argo CD
+branch: gitops
+prerequisites: [deployment-strategies]
+sources:
+  - 06-CI-CD/06-ArgoCD
+  - 01-Version-Control/04-GitOps
+theory: |
+  **GitOps:** the desired state of the cluster lives in **Git**; an agent *in* the cluster pulls it and
+  makes reality match. Nobody runs `kubectl apply` against production — they open a pull request.
+
+  **Argo CD** runs in the `argocd` namespace. Its unit is the **Application** (a custom resource):
+
+  ```yaml
+  apiVersion: argoproj.io/v1alpha1
+  kind: Application
+  metadata: { name: shop, namespace: argocd }
+  spec:
+    project: default
+    source:
+      repoURL: https://github.com/acme/gitops.git
+      targetRevision: HEAD            # branch, tag or commit
+      path: apps/shop                 # plain YAML, or a Helm chart
+    destination:
+      server: https://kubernetes.default.svc
+      namespace: shop
+    syncPolicy:
+      automated: { prune: true, selfHeal: true }
+      syncOptions: [CreateNamespace=true]
+  ```
+
+  | Status | Meaning |
+  |---|---|
+  | **Synced / OutOfSync** | does the live state match Git? |
+  | **Healthy / Progressing / Degraded / Missing** | is what's running actually working? |
+
+  - Argo CD polls Git every **3 minutes** (`argocd app get NAME --refresh` checks now).
+  - **automated**: sync new commits by itself. **prune**: delete what was removed from Git.
+    **selfHeal**: undo manual changes (`kubectl edit/scale`) on managed objects.
+  - **Rollback = `git revert`** + push: a new commit that restores the old state, with an audit trail.
+    (`argocd app rollback` exists too, but only with auto-sync off.)
+
+  CLI: `argocd app list` · `app get` · `app create` · `app set` · `app sync` · `app wait` · `app diff` ·
+  `app history`. Here the CLI is already logged in (core mode).
+missions:
+  - id: argo-first-app
+    title: Point Argo CD at Git
+    type: guided
+    prompt: |
+      Argo CD is installed. The manifests for the shop live in **github.com/acme/gitops** under
+      `apps/shop`.
+
+      **Create an Argo CD application `shop` that deploys them into the namespace `shop` (create it if
+      needed), sync it, and wait until it's Healthy.**
+    initialState:
+      argocd: true
+      gitHosted:
+        - url: https://github.com/acme/gitops.git
+          message: Add shop manifests
+          files:
+            README.md: |
+              # Acme GitOps — what runs in the cluster
+            apps/shop/deployment.yaml: |
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: shop
+                labels: { app: shop }
+              spec:
+                replicas: 2
+                selector:
+                  matchLabels: { app: shop }
+                template:
+                  metadata:
+                    labels: { app: shop }
+                  spec:
+                    containers:
+                    - name: shop
+                      image: ghcr.io/acme/shop:1.0
+                      ports:
+                      - containerPort: 8080
+            apps/shop/service.yaml: |
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: shop
+              spec:
+                selector: { app: shop }
+                ports:
+                - port: 80
+                  targetPort: 8080
+      kubeImages:
+        "ghcr.io/acme/shop:*":
+          listen: [8080]
+          http: { "/": { body: "shop {tag}\n" } }
+      registryImages: [ghcr.io/acme/shop:1.0, ghcr.io/acme/shop:1.1]
+    hints:
+      - text: "`argocd app create shop --repo https://github.com/acme/gitops.git --path apps/shop --dest-server https://kubernetes.default.svc --dest-namespace shop --sync-option CreateNamespace=true`"
+        cost: 10
+      - text: "A new app is `OutOfSync / Missing` until you `argocd app sync shop`."
+        cost: 5
+      - text: "`argocd app wait shop --health` waits until the pods are ready."
+        cost: 5
+    validator:
+      checks:
+        - type: argoApp
+          name: shop
+          sync: Synced
+          health: Healthy
+        - type: kubeRollout
+          name: shop
+          namespace: shop
+    xp: 60
+    par: 5
+    solution:
+      - argocd app create shop --repo https://github.com/acme/gitops.git --path apps/shop --dest-server https://kubernetes.default.svc --dest-namespace shop --sync-option CreateNamespace=true
+      - argocd app list
+      - argocd app sync shop
+      - argocd app wait shop --health --timeout 120
+    explain: |
+      Nothing was applied from your terminal: Argo CD read `apps/shop` at the current commit and applied
+      it from inside the cluster. `argocd app get shop` shows each resource with its own sync and health
+      status — and the commit it's synced to.
+
+  - id: argo-git-change
+    title: Change it the GitOps way
+    type: guided
+    prompt: |
+      The `shop` application syncs automatically (with prune and self-heal). Your clone of the gitops repo
+      is `~/gitops`.
+
+      **Run 3 replicas of `ghcr.io/acme/shop:1.1` — by changing Git, not the cluster.** (Try a
+      `kubectl scale` afterwards and watch what self-heal does.)
+    initialState:
+      argocd: true
+      gitHosted:
+        - url: https://github.com/acme/gitops.git
+          message: Add shop manifests
+          files:
+            apps/shop/deployment.yaml: |
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: shop
+                labels: { app: shop }
+              spec:
+                replicas: 2
+                selector:
+                  matchLabels: { app: shop }
+                template:
+                  metadata:
+                    labels: { app: shop }
+                  spec:
+                    containers:
+                    - name: shop
+                      image: ghcr.io/acme/shop:1.0
+                      ports:
+                      - containerPort: 8080
+            apps/shop/service.yaml: |
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: shop
+              spec:
+                selector: { app: shop }
+                ports:
+                - port: 80
+                  targetPort: 8080
+      kubeImages:
+        "ghcr.io/acme/shop:*":
+          listen: [8080]
+          http: { "/": { body: "shop {tag}\n" } }
+      registryImages: [ghcr.io/acme/shop:1.0, ghcr.io/acme/shop:1.1]
+      argoApps: |
+        apiVersion: argoproj.io/v1alpha1
+        kind: Application
+        metadata:
+          name: shop
+          namespace: argocd
+        spec:
+          project: default
+          source:
+            repoURL: https://github.com/acme/gitops.git
+            targetRevision: HEAD
+            path: apps/shop
+          destination:
+            server: https://kubernetes.default.svc
+            namespace: shop
+          syncPolicy:
+            automated: { prune: true, selfHeal: true }
+            syncOptions: [CreateNamespace=true]
+      setup:
+        - git clone -q https://github.com/acme/gitops.git
+      cwd: /home/student/gitops
+    hints:
+      - text: "Edit `apps/shop/deployment.yaml`: `sed -i 's/replicas: 2/replicas: 3/; s/shop:1.0/shop:1.1/' apps/shop/deployment.yaml`, then commit and push."
+        cost: 5
+      - text: "Argo CD polls every 3 minutes; `argocd app get shop --refresh` makes it look now."
+        cost: 5
+      - text: "`argocd app wait shop --sync --health --timeout 120`"
+        cost: 5
+    validator:
+      checks:
+        - type: argoApp
+          name: shop
+          sync: Synced
+          health: Healthy
+          atHead: main
+        - type: kubeRollout
+          name: shop
+          namespace: shop
+          image: ghcr.io/acme/shop:1.1
+          replicas: 3
+    xp: 60
+    par: 8
+    solution:
+      - "sed -i 's/replicas: 2/replicas: 3/; s/shop:1.0/shop:1.1/' apps/shop/deployment.yaml"
+      - git commit -qam "shop 1.1, 3 replicas"
+      - git push -q
+      - argocd app get shop --refresh
+      - argocd app wait shop --sync --health --timeout 120
+      - kubectl scale deployment shop -n shop --replicas=1
+      - argocd app wait shop --sync --health --timeout 60
+      - kubectl get deployment shop -n shop
+    explain: |
+      The commit **is** the deployment: who changed what, when and why is in `git log`, and the cluster
+      follows. The `kubectl scale` was undone within seconds by self-heal — manual changes to managed
+      objects don't stick, which is exactly the point (and why emergency fixes also go through Git).
+
+  - id: argo-revert
+    title: Roll back with git revert
+    type: guided
+    prompt: |
+      Someone pushed "Bump shop to 2.0" to the gitops repo. Argo CD synced it — and the new pods never
+      start. Your clone is `~/gitops`.
+
+      **Roll back the GitOps way and get the app Synced and Healthy again.**
+    initialState:
+      argocd: true
+      gitHosted:
+        - url: https://github.com/acme/gitops.git
+          message: Add shop manifests
+          files:
+            apps/shop/deployment.yaml: |
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: shop
+                labels: { app: shop }
+              spec:
+                replicas: 2
+                selector:
+                  matchLabels: { app: shop }
+                template:
+                  metadata:
+                    labels: { app: shop }
+                  spec:
+                    containers:
+                    - name: shop
+                      image: ghcr.io/acme/shop:1.1
+                      ports:
+                      - containerPort: 8080
+            apps/shop/service.yaml: |
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: shop
+              spec:
+                selector: { app: shop }
+                ports:
+                - port: 80
+                  targetPort: 8080
+      kubeImages:
+        "ghcr.io/acme/shop:*":
+          listen: [8080]
+          http: { "/": { body: "shop {tag}\n" } }
+      registryImages: [ghcr.io/acme/shop:1.0, ghcr.io/acme/shop:1.1]
+      argoApps: |
+        apiVersion: argoproj.io/v1alpha1
+        kind: Application
+        metadata:
+          name: shop
+          namespace: argocd
+        spec:
+          project: default
+          source:
+            repoURL: https://github.com/acme/gitops.git
+            targetRevision: HEAD
+            path: apps/shop
+          destination:
+            server: https://kubernetes.default.svc
+            namespace: shop
+          syncPolicy:
+            automated: { prune: true, selfHeal: true }
+            syncOptions: [CreateNamespace=true]
+      setup:
+        - git clone -q https://github.com/acme/gitops.git
+        - cd gitops
+        - "sed -i 's/shop:1.1/shop:2.0/' apps/shop/deployment.yaml"
+        - git commit -qam "Bump shop to 2.0"
+        - git push -q
+      cwd: /home/student/gitops
+      setupAge: 900
+    hints:
+      - text: "`argocd app get shop` and `kubectl get pods -n shop`: the 2.0 pods are in ImagePullBackOff — that tag was never pushed."
+        cost: 5
+      - text: "`git revert --no-edit HEAD` makes a new commit that undoes the bump; push it."
+        cost: 5
+      - text: "`argocd app get shop --refresh`, then `argocd app wait shop --health --timeout 180`."
+        cost: 5
+    validator:
+      checks:
+        - type: gitRemote
+          url: https://github.com/acme/gitops.git
+          branch: main
+          pattern: "^Revert"
+        - type: argoApp
+          name: shop
+          sync: Synced
+          health: Healthy
+          atHead: main
+        - type: kubeRollout
+          name: shop
+          namespace: shop
+          image: ghcr.io/acme/shop:1.1
+    xp: 60
+    par: 7
+    solution:
+      - argocd app get shop
+      - kubectl get pods -n shop
+      - git revert --no-edit HEAD
+      - git push -q
+      - argocd app get shop --refresh
+      - argocd app wait shop --health --timeout 180
+    explain: |
+      The bad version was **Synced** (the cluster matched Git) yet **Degraded** (it didn't work) — the two
+      statuses answer different questions. Thanks to the rolling update the old 1.1 pods kept serving
+      the whole time. `git revert` kept both the mistake and the fix in history; nobody had to touch the
+      cluster.
+
+  - id: gitops-check
+    title: "Knowledge check: GitOps"
+    type: quiz
+    prompt: Git as the source of truth.
+    xp: 30
+    questions:
+      - kind: single
+        prompt: Someone runs `kubectl scale deployment shop --replicas=10` on an app with selfHeal enabled. What happens?
+        options:
+          - It stays at 10 until the next commit
+          - Argo CD sets it back to the replicas in Git
+          - Argo CD deletes the Deployment
+          - The app becomes Degraded forever
+        answer: 1
+      - kind: single
+        prompt: An app shows `Synced` and `Degraded`. What does that mean?
+        options:
+          - Git and the cluster differ
+          - The cluster matches Git, but what Git describes isn't working
+          - Argo CD is down
+          - The sync is still running
+        answer: 1
+      - kind: single
+        prompt: You delete `cache.yaml` from the gitops repo. Auto-sync is on but prune is off. What happens to the live cache Deployment?
+        options: [It's deleted, It keeps running and the app shows OutOfSync, Argo CD recreates it, The app is deleted]
+        answer: 1
+      - kind: single
+        prompt: What's the preferred rollback in a GitOps setup?
+        options: [kubectl rollout undo, git revert + push, argocd app delete, Restore an etcd backup]
+        answer: 1
+      - kind: single
+        prompt: How often does Argo CD check Git by default (without webhooks)?
+        options: [Every 10 seconds, Every 3 minutes, Every hour, Only on argocd app sync]
+        answer: 1
+
+  - id: boss-gitops-drift
+    title: "Boss: drifted and out of sync"
+    type: boss
+    prompt: |
+      🌀 The `shop` application in Argo CD has been red for days and nobody trusts it. The cluster has
+      drifted: there are hand-made changes and leftovers.
+
+      **Make Git the source of truth again:** `shop` must be **Synced** to the latest commit of `main`,
+      **Healthy**, syncing **automatically with prune and self-heal** — and the old `shop-legacy`
+      Deployment (no longer in Git) must be gone.
+    initialState:
+      argocd: true
+      gitHosted:
+        - url: https://github.com/acme/gitops.git
+          message: Shop manifests
+          files:
+            apps/shop/deployment.yaml: |
+              apiVersion: apps/v1
+              kind: Deployment
+              metadata:
+                name: shop
+                labels: { app: shop }
+              spec:
+                replicas: 3
+                selector:
+                  matchLabels: { app: shop }
+                template:
+                  metadata:
+                    labels: { app: shop }
+                  spec:
+                    containers:
+                    - name: shop
+                      image: ghcr.io/acme/shop:1.1
+                      ports:
+                      - containerPort: 8080
+            apps/shop/service.yaml: |
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: shop
+              spec:
+                selector: { app: shop }
+                ports:
+                - port: 80
+                  targetPort: 8080
+      kubeImages:
+        "ghcr.io/acme/shop:*":
+          listen: [8080]
+          http: { "/": { body: "shop {tag}\n" } }
+      registryImages: [ghcr.io/acme/shop:1.0, ghcr.io/acme/shop:1.1]
+      kubeManifests: |
+        apiVersion: v1
+        kind: Namespace
+        metadata:
+          name: shop
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: shop
+          namespace: shop
+          labels: { app: shop, app.kubernetes.io/instance: shop }
+        spec:
+          replicas: 1
+          selector:
+            matchLabels: { app: shop }
+          template:
+            metadata:
+              labels: { app: shop }
+            spec:
+              containers:
+              - name: shop
+                image: ghcr.io/acme/shop:1.0
+                ports:
+                - containerPort: 8080
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: shop-legacy
+          namespace: shop
+          labels: { app: shop-legacy, app.kubernetes.io/instance: shop }
+        spec:
+          replicas: 2
+          selector:
+            matchLabels: { app: shop-legacy }
+          template:
+            metadata:
+              labels: { app: shop-legacy }
+            spec:
+              containers:
+              - name: shop
+                image: ghcr.io/acme/shop:1.0
+                ports:
+                - containerPort: 8080
+      argoApps: |
+        apiVersion: argoproj.io/v1alpha1
+        kind: Application
+        metadata:
+          name: shop
+          namespace: argocd
+        spec:
+          project: default
+          source:
+            repoURL: https://github.com/acme/gitops.git
+            targetRevision: HEAD
+            path: apps/shopp
+          destination:
+            server: https://kubernetes.default.svc
+            namespace: shop
+      setupAge: 7200
+    hints: []
+    validator:
+      checks:
+        - type: argoApp
+          name: shop
+          sync: Synced
+          health: Healthy
+          atHead: main
+          automated: true
+          prune: true
+          selfHeal: true
+        - type: kubeResource
+          kind: Deployment
+          name: shop-legacy
+          namespace: shop
+          exists: false
+        - type: kubeRollout
+          name: shop
+          namespace: shop
+          image: ghcr.io/acme/shop:1.1
+          replicas: 3
+    xp: 200
+    par: 9
+    solution:
+      - argocd app get shop
+      - argocd app set shop --path apps/shop
+      - argocd app diff shop || true
+      - argocd app set shop --sync-policy automated --auto-prune --self-heal
+      - argocd app get shop --refresh
+      - argocd app wait shop --sync --health --timeout 180
+      - kubectl get deployments -n shop
+    explain: |
+      The app pointed at `apps/shopp` — a path that doesn't exist — so Argo CD couldn't even compute a
+      diff (`ComparisonError`). Once fixed, `app diff` showed the drift: the hand-scaled `shop` and a
+      `shop-legacy` still carrying the app's tracking label. Auto-sync applied Git, and **prune** removed
+      what Git no longer describes. Without prune, the leftover would have kept the app OutOfSync
+      forever; without self-heal, the next hand edit would drift it again.

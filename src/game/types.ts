@@ -40,6 +40,9 @@ export type BranchId =
   | 'k8s-traffic'
   | 'k8s-rbac-helm'
   | 'cicd'
+  | 'cicd-gitlab'
+  | 'deploy-strategies'
+  | 'gitops'
   | 'cloud-iac'
   | 'observability'
   | 'security';

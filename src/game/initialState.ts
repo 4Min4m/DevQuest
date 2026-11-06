@@ -144,6 +144,9 @@ export function buildInitialState(spec: InitialStateSpec = {}): SimState {
         const r = admit(ks, doc, state.clock, { source: 'mission', mode: 'apply', lastApplied: true });
         if (r.action === 'created') putObj(ks, r.obj);
       }
+      // Let the Applications sync the starting state before setup changes anything in Git.
+      state.clock += 120_000;
+      reconcile(state);
     }
     // Without setup commands the cluster still runs for `setupAge` before the learner arrives.
     if ((spec.kubeManifests || spec.argocd) && !spec.setup?.length) {
@@ -166,6 +169,11 @@ export function buildInitialState(spec: InitialStateSpec = {}): SimState {
   }
 
   if (spec.setup?.length) {
+    // When the starting directory is created by setup (e.g. a clone), setup itself starts in $HOME.
+    if (!new Vfs(state.fs, { name: 'root', groups: ['root'] }).exists(state.cwd)) {
+      state.cwd = state.vars.HOME;
+      state.vars.PWD = state.cwd;
+    }
     const shell = createShell(state);
     for (const line of spec.setup) {
       const r = shell.run(line);

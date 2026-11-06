@@ -74,9 +74,9 @@ export function parseWorkflow(file: string, text: string): Workflow | { error: s
       if (!JOB_KEYS.includes(k)) return fail(jp.key, `Unexpected value '${k}'`);
     }
     if (!(job as YAMLMap).has('uses')) {
-      if (!(job as YAMLMap).has('runs-on')) return fail(job, 'Required property is missing: runs-on');
+      if (!(job as YAMLMap).has('runs-on')) return fail(pair.key, 'Required property is missing: runs-on');
       const steps = (job as YAMLMap).get('steps', true) as J;
-      if (!steps) return fail(job, 'Required property is missing: steps');
+      if (!steps) return fail(pair.key, 'Required property is missing: steps');
       if (!isSeq(steps)) return fail(steps, 'A sequence was not expected');
       for (const st of steps.items as J[]) {
         if (!isMap(st)) return fail(st, 'Unexpected value');

@@ -117,6 +117,12 @@ function glabCi(ctx: CommandContext, argv: string[]): number {
       const t = target(ctx, p);
       const branch = (p.flags.branch as string | undefined) ?? localBranch(ctx);
       const run = pipelineFor(t.repo, branch);
+      if (p.flags.live) {
+        // Follow the pipeline until nothing is running any more (manual / stuck jobs stop it).
+        const end = Math.max(ctx.state.clock, ...run.jobs.map((j) => j.completedAt ?? 0));
+        ctx.state.clock = end + 1000;
+      }
+      const now = ctx.state.clock;
       let out = '';
       if (run.error) out += `${run.error}\n`;
       for (const j of run.jobs) {

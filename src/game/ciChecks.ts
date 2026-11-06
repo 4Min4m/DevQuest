@@ -31,6 +31,7 @@ export function evaluateCi(check: CiCheck, state: SimState): boolean {
       } else if (s.status !== 'completed' || s.conclusion !== want) return false;
       if (check.job) {
         const job = run.jobs.find((j) => j.name === check.job || j.key === check.job);
+        if (check.jobStatus === 'absent') return !job;
         if (!job) return false;
         const js = jobState(job, state.clock);
         const got = job.status === 'manual' ? 'manual' : js.status === 'completed' ? js.conclusion : js.status;
@@ -55,6 +56,7 @@ export function describeCi(check: CiCheck): string {
     case 'ciRun': {
       const what = check.workflow ? `the \`${check.workflow}\` ${check.repo.includes('gitlab') ? 'pipeline' : 'workflow'}` : check.repo.includes('gitlab') ? 'the pipeline' : 'the CI run';
       const on = check.branch ? ` on \`${check.branch}\`${check.anyCommit ? '' : ' (latest commit)'}` : '';
+      if (check.job && check.jobStatus === 'absent') return `${what}${on} should not contain the job \`${check.job}\``;
       if (check.job) return `${what}${on}: job \`${check.job}\` should be ${check.jobStatus ?? 'success'}`;
       return `${what}${on} should finish with ${check.status ?? 'success'}`;
     }

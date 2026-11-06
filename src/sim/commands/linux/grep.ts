@@ -38,7 +38,10 @@ export function posixToJs(pattern: string, extended: boolean): string {
       i = j;
       continue;
     }
-    if (!extended && '(){}|+?'.includes(c)) out += '\\' + c;
+    // In basic regexes `$` / `^` only anchor at the end / start; elsewhere they're literal characters.
+    if (!extended && c === '$' && i !== src.length - 1 && !src.startsWith('\\)', i + 1)) out += '\\$';
+    else if (!extended && c === '^' && i !== 0 && !src.slice(0, i).endsWith('\\(')) out += '\\^';
+    else if (!extended && '(){}|+?'.includes(c)) out += '\\' + c;
     else out += c;
   }
   return out;

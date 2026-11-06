@@ -1,0 +1,512 @@
+id: deployment-strategies
+title: Deployment strategies
+branch: deploy-strategies
+prerequisites: [pipeline-design-gitlab]
+sources:
+  - 06-CI-CD/03-Deployment-Strategies
+theory: |
+  Deploying is the riskiest moment in a system's life. A strategy trades **blast radius**, **rollback
+  speed**, **downtime** and **cost**:
+
+  | Strategy | How | Rollback | Watch out |
+  |---|---|---|---|
+  | **Recreate** | stop all v1, start v2 | redeploy v1 | downtime; only for batch / can't-run-two-versions |
+  | **Rolling** (Kubernetes default) | replace pods a few at a time | `rollout undo` (minutes) | both versions serve at once |
+  | **Blue/green** | run v2 next to v1, switch the Service selector | switch back (seconds) | 2× capacity while both run; shared DB must fit both |
+  | **Canary** | send 5–20% of traffic to v2, watch, increase | set the weight to 0 | needs weighted routing (ingress, mesh) |
+  | **Feature flags** | ship code dark, turn it on per user | flip the flag | flag debt |
+
+  **Rolling knobs:** `maxUnavailable` (how far below the desired count you may go) and `maxSurge` (how
+  far above). `maxUnavailable: 0, maxSurge: 1` never loses capacity; readiness probes decide when a new
+  pod counts.
+
+  **Blue/green in Kubernetes:** two Deployments (`version: blue` / `green`) and one Service whose
+  selector you flip: `kubectl patch service shop -p '{"spec":{"selector":{"version":"green"}}}'`.
+
+  **Canary with ingress-nginx:** a second Ingress for the same host/path with
+  `nginx.ingress.kubernetes.io/canary: "true"` and `canary-weight: "10"` (percent). `canary-by-header:
+  X-Canary` lets testers force it with `X-Canary: always` (or `never`). `kubectl annotate ... --overwrite`
+  changes the weight on the fly.
+missions:
+  - id: zero-downtime
+    title: Rolling out without losing capacity
+    type: guided
+    prompt: |
+      The `api` Deployment (4 replicas) rolls out with `maxUnavailable: 50%` — every release drops half
+      the capacity at peak traffic.
+
+      **Change the rolling update to `maxSurge: 1` and `maxUnavailable: 0`, then roll out
+      `ghcr.io/acme/api:2.0`.**
+    initialState:
+      kubeImages:
+        ghcr.io/acme/api:1.0:
+          listen: [8080]
+          http: { "/": { body: "api 1.0\n" }, "/ready": { body: "ok\n" } }
+        ghcr.io/acme/api:2.0:
+          listen: [8080]
+          warmupSec: 5
+          http: { "/": { body: "api 2.0\n" }, "/ready": { body: "ok\n" } }
+      kubeManifests: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: api
+          labels: { app: api }
+        spec:
+          replicas: 4
+          strategy:
+            type: RollingUpdate
+            rollingUpdate:
+              maxSurge: 0
+              maxUnavailable: 50%
+          selector:
+            matchLabels: { app: api }
+          template:
+            metadata:
+              labels: { app: api }
+            spec:
+              containers:
+              - name: api
+                image: ghcr.io/acme/api:1.0
+                ports:
+                - containerPort: 8080
+                readinessProbe:
+                  httpGet: { path: /ready, port: 8080 }
+                  periodSeconds: 2
+    hints:
+      - text: "`kubectl get deploy api -o jsonpath='{.spec.strategy}'` shows the current settings."
+        cost: 5
+      - text: "`kubectl patch deployment api -p '{\"spec\":{\"strategy\":{\"rollingUpdate\":{\"maxSurge\":1,\"maxUnavailable\":0}}}}'`"
+        cost: 10
+      - text: "`kubectl set image deployment/api api=ghcr.io/acme/api:2.0`, then `kubectl rollout status deployment/api`."
+        cost: 5
+    validator:
+      checks:
+        - type: kubeResource
+          kind: Deployment
+          name: api
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          regex: "^0%?$"
+        - type: kubeResource
+          kind: Deployment
+          name: api
+          path: spec.strategy.rollingUpdate.maxSurge
+          regex: "^(1|25%)$"
+        - type: kubeRollout
+          name: api
+          image: ghcr.io/acme/api:2.0
+          replicas: 4
+    xp: 50
+    par: 5
+    solution:
+      - kubectl get deployment api -o jsonpath='{.spec.strategy}'
+      - "kubectl patch deployment api -p '{\"spec\":{\"strategy\":{\"rollingUpdate\":{\"maxSurge\":1,\"maxUnavailable\":0}}}}'"
+      - kubectl set image deployment/api api=ghcr.io/acme/api:2.0
+      - kubectl rollout status deployment/api
+    explain: |
+      With `maxUnavailable: 0` the controller first adds one v2 pod (the surge), waits until its readiness
+      probe passes, and only then removes a v1 pod — capacity never drops below 4. The price is one extra
+      pod's worth of resources during the rollout and a slower release.
+
+  - id: blue-green
+    title: Blue/green with an instant switch
+    type: guided
+    prompt: |
+      **blue** (`shop:1.0`) serves all traffic through the `shop` Service. **green** (`shop:2.0`) is
+      already running next to it, getting no traffic.
+
+      **Check green directly, switch the `shop` Service to it, and keep blue running as the instant
+      rollback target.**
+    initialState:
+      kubeImages:
+        ghcr.io/acme/shop:1.0:
+          listen: [8080]
+          http: { "/": { body: "shop 1.0 (blue)\n" } }
+        ghcr.io/acme/shop:2.0:
+          listen: [8080]
+          http: { "/": { body: "shop 2.0 (green)\n" } }
+      kubeManifests: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: shop-blue
+          labels: { app: shop, version: blue }
+        spec:
+          replicas: 2
+          selector:
+            matchLabels: { app: shop, version: blue }
+          template:
+            metadata:
+              labels: { app: shop, version: blue }
+            spec:
+              containers:
+              - name: shop
+                image: ghcr.io/acme/shop:1.0
+                ports:
+                - containerPort: 8080
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: shop-green
+          labels: { app: shop, version: green }
+        spec:
+          replicas: 2
+          selector:
+            matchLabels: { app: shop, version: green }
+          template:
+            metadata:
+              labels: { app: shop, version: green }
+            spec:
+              containers:
+              - name: shop
+                image: ghcr.io/acme/shop:2.0
+                ports:
+                - containerPort: 8080
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: shop
+        spec:
+          selector: { app: shop, version: blue }
+          ports:
+          - port: 80
+            targetPort: 8080
+    hints:
+      - text: "Test green before it gets traffic: `kubectl port-forward deploy/shop-green 8080:8080`, then `curl -s localhost:8080`."
+        cost: 5
+      - text: "`kubectl patch service shop -p '{\"spec\":{\"selector\":{\"version\":\"green\"}}}'` (or `kubectl set selector service shop 'app=shop,version=green'`)."
+        cost: 10
+      - text: "`kubectl get endpoints shop` shows which pods now receive traffic."
+        cost: 5
+    validator:
+      checks:
+        - type: kubeHttp
+          service: shop
+          contains: shop 2.0
+        - type: kubeResource
+          kind: Service
+          name: shop
+          path: spec.selector.version
+          equals: green
+      guards:
+        - type: kubeResource
+          kind: Deployment
+          name: shop-blue
+          message: Keep blue running — it's your instant rollback.
+    xp: 60
+    par: 5
+    solution:
+      - kubectl port-forward deploy/shop-green 8080:8080
+      - curl -s localhost:8080
+      - "kubectl patch service shop -p '{\"spec\":{\"selector\":{\"version\":\"green\"}}}'"
+      - kubectl get endpoints shop
+    explain: |
+      The switch is one API call and takes effect as fast as the endpoints update — and so does the
+      rollback (`version: blue`). That's the whole appeal; the cost is running both versions at full size
+      until you're confident enough to scale blue down.
+
+  - id: canary
+    title: A 10% canary
+    type: guided
+    prompt: |
+      `shop.local` is served by the Ingress `shop` → Service `shop-v1`. Version 2 runs behind Service
+      `shop-v2` with no traffic.
+
+      **Create a canary Ingress `shop-canary` that sends 10% of `shop.local` to `shop-v2`, and lets
+      testers force v2 with the header `X-Canary: always`.**
+    initialState:
+      kubeImages:
+        ghcr.io/acme/shop:1.0:
+          listen: [8080]
+          http: { "/": { body: "shop v1\n" } }
+        ghcr.io/acme/shop:2.0:
+          listen: [8080]
+          http: { "/": { body: "shop v2\n" } }
+      kubeManifests: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: shop-v1
+          labels: { app: shop-v1 }
+        spec:
+          replicas: 3
+          selector:
+            matchLabels: { app: shop-v1 }
+          template:
+            metadata:
+              labels: { app: shop-v1 }
+            spec:
+              containers:
+              - name: shop
+                image: ghcr.io/acme/shop:1.0
+                ports:
+                - containerPort: 8080
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: shop-v1
+        spec:
+          selector: { app: shop-v1 }
+          ports:
+          - port: 80
+            targetPort: 8080
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: shop-v2
+          labels: { app: shop-v2 }
+        spec:
+          replicas: 1
+          selector:
+            matchLabels: { app: shop-v2 }
+          template:
+            metadata:
+              labels: { app: shop-v2 }
+            spec:
+              containers:
+              - name: shop
+                image: ghcr.io/acme/shop:2.0
+                ports:
+                - containerPort: 8080
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: shop-v2
+        spec:
+          selector: { app: shop-v2 }
+          ports:
+          - port: 80
+            targetPort: 8080
+        ---
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: shop
+        spec:
+          ingressClassName: nginx
+          rules:
+          - host: shop.local
+            http:
+              paths:
+              - path: /
+                pathType: Prefix
+                backend:
+                  service:
+                    name: shop-v1
+                    port:
+                      number: 80
+    hints:
+      - text: "A second Ingress for the same host/path is rejected — unless it's marked as a canary with `nginx.ingress.kubernetes.io/canary=true`."
+        cost: 5
+      - text: "`kubectl create ingress shop-canary --class=nginx --rule=\"shop.local/*=shop-v2:80\" --annotation=nginx.ingress.kubernetes.io/canary=true --annotation=nginx.ingress.kubernetes.io/canary-weight=10 --annotation=nginx.ingress.kubernetes.io/canary-by-header=X-Canary`"
+        cost: 10
+      - text: "Test: `curl -s -H \"Host: shop.local\" -H \"X-Canary: always\" localhost` returns v2; plain requests mostly v1."
+        cost: 5
+    validator:
+      checks:
+        - type: kubeResource
+          kind: Ingress
+          name: shop-canary
+          path: metadata.annotations.nginx\.ingress\.kubernetes\.io/canary-weight
+          equals: "10"
+        - type: kubeIngress
+          host: shop.local
+          headers: { X-Canary: always }
+          contains: shop v2
+        - type: kubeIngress
+          host: shop.local
+          contains: shop v1
+    xp: 60
+    par: 4
+    solution:
+      - kubectl create ingress shop-canary --class=nginx --rule="shop.local/*=shop-v2:80" --annotation=nginx.ingress.kubernetes.io/canary=true --annotation=nginx.ingress.kubernetes.io/canary-weight=10 --annotation=nginx.ingress.kubernetes.io/canary-by-header=X-Canary
+      - 'curl -s -H "Host: shop.local" -H "X-Canary: always" localhost'
+      - 'curl -s -H "Host: shop.local" localhost localhost localhost localhost localhost localhost localhost localhost localhost localhost'
+    explain: |
+      Ten plain requests gave you roughly one v2 answer: the weight is a percentage of requests, decided
+      per request. The header rule wins over the weight, so QA can hit v2 deterministically while real
+      users get the 10%. Promote by raising the weight (`kubectl annotate ingress shop-canary
+      nginx.ingress.kubernetes.io/canary-weight=50 --overwrite`), and finally point the main Ingress at v2.
+
+  - id: deploy-strategies-check
+    title: "Knowledge check: deployment strategies"
+    type: quiz
+    prompt: Pick the right strategy and the right knob.
+    xp: 30
+    questions:
+      - kind: single
+        prompt: Which strategy gives the fastest rollback?
+        options: [Recreate, Rolling, Blue/green, A/B testing]
+        answer: 2
+      - kind: single
+        prompt: "A Deployment has 4 replicas, `maxSurge: 1`, `maxUnavailable: 0`. The most pods during a rollout?"
+        options: ["3", "4", "5", "8"]
+        answer: 2
+      - kind: single
+        prompt: You must change the database schema in a way the old version can't read. Which strategy fits?
+        options: [Canary, Blue/green with a shared DB, Recreate (or an expand/contract migration first), Rolling]
+        answer: 2
+      - kind: single
+        prompt: What does a canary measure that an A/B test doesn't?
+        options:
+          - Conversion rate
+          - Stability of the new version (errors, latency) on a slice of real traffic
+          - User preferences
+          - Database size
+        answer: 1
+      - kind: single
+        prompt: How do you make deploying a feature independent from releasing it?
+        options: [Canary, Feature flags, Recreate, A second cluster]
+        answer: 1
+
+  - id: boss-bad-canary
+    title: "Boss: the canary ate the checkout"
+    type: boss
+    prompt: |
+      🔥 Checkout errors at 100%. Someone "promoted" the v2 canary of **shop.local** last night — and
+      scaled the stable v1 down "to save money".
+
+      **Make every `shop.local/checkout` request work again on v1.** Keep the canary Ingress (QA still
+      needs it), but it must take no regular traffic.
+    initialState:
+      kubeImages:
+        ghcr.io/acme/shop:1.0:
+          listen: [8080]
+          http: { "/": { body: "shop v1\n" }, "/checkout": { body: "checkout v1: ok\n" } }
+        ghcr.io/acme/shop:2.0:
+          listen: [8080]
+          http: { "/": { body: "shop v2\n" }, "/checkout": { status: 500, body: "checkout v2: TypeError: Cannot read properties of undefined (reading 'total')\n" } }
+      kubeManifests: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: shop-v1
+          labels: { app: shop-v1 }
+        spec:
+          replicas: 0
+          selector:
+            matchLabels: { app: shop-v1 }
+          template:
+            metadata:
+              labels: { app: shop-v1 }
+            spec:
+              containers:
+              - name: shop
+                image: ghcr.io/acme/shop:1.0
+                ports:
+                - containerPort: 8080
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: shop-v1
+        spec:
+          selector: { app: shop-v1 }
+          ports:
+          - port: 80
+            targetPort: 8080
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: shop-v2
+          labels: { app: shop-v2 }
+        spec:
+          replicas: 3
+          selector:
+            matchLabels: { app: shop-v2 }
+          template:
+            metadata:
+              labels: { app: shop-v2 }
+            spec:
+              containers:
+              - name: shop
+                image: ghcr.io/acme/shop:2.0
+                ports:
+                - containerPort: 8080
+        ---
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: shop-v2
+        spec:
+          selector: { app: shop-v2 }
+          ports:
+          - port: 80
+            targetPort: 8080
+        ---
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: shop
+        spec:
+          ingressClassName: nginx
+          rules:
+          - host: shop.local
+            http:
+              paths:
+              - path: /
+                pathType: Prefix
+                backend:
+                  service:
+                    name: shop-v1
+                    port:
+                      number: 80
+        ---
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: shop-canary
+          annotations:
+            nginx.ingress.kubernetes.io/canary: "true"
+            nginx.ingress.kubernetes.io/canary-weight: "100"
+        spec:
+          ingressClassName: nginx
+          rules:
+          - host: shop.local
+            http:
+              paths:
+              - path: /
+                pathType: Prefix
+                backend:
+                  service:
+                    name: shop-v2
+                    port:
+                      number: 80
+      setupAge: 1800
+    hints: []
+    validator:
+      checks:
+        - type: kubeIngress
+          host: shop.local
+          path: /checkout
+          status: 200
+          contains: checkout v1
+        - type: kubeRollout
+          name: shop-v1
+        - type: kubeResource
+          kind: Ingress
+          name: shop-canary
+          path: metadata.annotations.nginx\.ingress\.kubernetes\.io/canary-weight
+          equals: "0"
+    xp: 200
+    par: 9
+    solution:
+      - 'curl -s -H "Host: shop.local" localhost/checkout'
+      - kubectl get ingress
+      - kubectl describe ingress shop-canary
+      - kubectl get deployments
+      - kubectl scale deployment shop-v1 --replicas=3
+      - kubectl rollout status deployment/shop-v1
+      - kubectl annotate ingress shop-canary nginx.ingress.kubernetes.io/canary-weight=0 --overwrite
+      - 'curl -s -H "Host: shop.local" localhost/checkout'
+    explain: |
+      `canary-weight: 100` meant the canary took **all** traffic, so v1's Ingress was effectively dead —
+      and with v1 scaled to 0 there was nothing to fall back to anyway. Order matters in the fix: bring v1
+      back (and wait until it's Ready) **before** turning the canary down, or you'd trade 500s for 503s.
+      A canary that's "promoted" by weight alone, without the stable side being updated, is a trap.

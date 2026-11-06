@@ -56,6 +56,22 @@ browser terminal. No backend, no runtime network calls. See [CLAUDE.md](CLAUDE.m
   checks, and an offline `bitnami` repo. Four lessons — Storage & stateful apps, Scheduling &
   autoscaling, Ingress & network policies, RBAC & Helm — with 12 missions, 4 knowledge checks and 4
   boss fights (a Pending database, Black Friday autoscaling, a dark storefront, a Forbidden pipeline).
+- **Step 12 done:** CI/CD and GitOps. Pushing to a hosted remote starts **pipelines** that run on fresh,
+  simulated runner machines: **GitHub Actions** (triggers with branch/path filters, `needs`/`if`,
+  matrices, env/secrets/vars, step outputs, artifacts, caches, `workflow_dispatch`, invalid-workflow
+  annotations, and the common marketplace actions) with `gh run list/view/watch/rerun`,
+  `gh workflow run` and `gh secret`; **GitLab CI** (stages, needs, rules/only/except, manual jobs,
+  artifacts, caches, protected/masked/file variables, runner tags) with `glab ci
+  status/trace/trigger/retry/run/lint` and `glab variable`. A simulated `npm` (jest/eslint/vite output
+  driven by each mission), `docker tag/login/push` to a registry the cluster pulls from (a tag CI never
+  pushed fails with `ImagePullBackOff`). **Deployment strategies:** `kubectl patch`, `kubectl set
+  selector`, Recreate/rolling knobs, blue/green, ingress-nginx canaries (weight, header, cookie).
+  **Argo CD:** installed into the cluster with Application CRDs; a controller that polls Git, renders
+  YAML or Helm charts, shows sync and health status, and auto-syncs with prune and self-heal; the
+  `argocd app` CLI (create/set/sync/wait/diff/history/rollback/delete). Four lessons — GitHub Actions,
+  pipeline design with GitLab CI, deployment strategies, GitOps with Argo CD — with 12 missions, 4
+  knowledge checks and 4 boss fights (a silent pipeline, release day, a canary gone wrong, a drifted
+  GitOps app).
 
 ### Roadmap (from the knowledge vault)
 
@@ -65,7 +81,7 @@ browser terminal. No backend, no runtime network calls. See [CLAUDE.md](CLAUDE.m
 | ~~9~~ | 01 Version Control | ✅ done (see above) |
 | ~~10~~ | 05 Kubernetes (1) | ✅ done (see above) |
 | ~~11~~ | 05 Kubernetes (2) | ✅ done (see above) |
-| 12 | 06 CI/CD, GitOps | Pipeline runner (GitHub Actions / GitLab CI), deployment strategies, ArgoCD-style sync |
+| ~~12~~ | 06 CI/CD, GitOps | ✅ done (see above) |
 | 13 | 07 Cloud, 08 IaC | Terraform, Ansible, mock AWS |
 | 14 | 09 Observability, 10 Security | PromQL, logs, alerting, DevSecOps + incident boss fights |
 
@@ -103,6 +119,10 @@ src/sim/kube/               Kubernetes: object store, controllers (time-stepped 
                             rbac, cli/
 src/sim/helm/               Helm: Go-template parser + executor, Sprig functions, charts and values,
                             releases (Secrets), offline repo, the helm CLI
+src/sim/forge/              GitHub/GitLab around the hosted remotes: settings, CI runs, registry
+src/sim/ci/                 pipeline engines (github.ts, gitlab.ts), runner machines, marketplace
+                            actions, expressions, gh / glab / npm commands
+src/sim/argocd/             the argocd CLI (the controller lives in src/sim/kube/argocd.ts)
 src/game/                   mission engine: initial-state builder, validators, MissionSession;
                             progress.ts (XP, levels, streak, hearts, unlocking, skill tree),
                             store.ts (Zustand store persisted to localStorage)

@@ -95,7 +95,7 @@ function runSummary(repo: ForgeRepo, run: CiRun, now: number, verbose: boolean):
   const st = runState(run, now);
   let out = `\n${runIcon(run, now)} ${run.branch} ${run.workflow} · ${run.id}${run.attempt > 1 ? ` (Attempt #${run.attempt})` : ''}\nTriggered via ${run.event} ${ago(now, run.createdAt)}\n\n`;
   if (run.error) {
-    return out + `X This run likely failed because of a workflow file issue.\n\nFor more information, see: ${webUrl(repo)}/actions/runs/${run.id}\n`;
+    return out + `X This run likely failed because of a workflow file issue.\n\nANNOTATIONS\nX ${run.error.replace(/\n/g, '\n  ')}\n\nFor more information, see: ${webUrl(repo)}/actions/runs/${run.id}\n`;
   }
   out += 'JOBS\n';
   const annotations: string[] = [];

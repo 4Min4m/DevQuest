@@ -138,8 +138,9 @@ function runJest(ctx: CommandContext, pkg: Pkg): number {
   out += `\nTest Suites: ${part(failedSuites, 'failed')}${part(suites - failedSuites, 'passed')}${suites} total\n`;
   out += `Tests:       ${part(failedTests, 'failed')}${part(total - failedTests, 'passed')}${total} total\n`;
   out += `Snapshots:   0 total\nTime:        ${(1.2 + total * 0.11).toFixed(2)} s\nRan all test suites.\n`;
-  // Jest reports on stderr.
-  ctx.err(out);
+  // Jest reports on stderr. A passing report isn't an error, so it isn't shown as one.
+  if (failedTests) ctx.err(out);
+  else ctx.note(out);
   return failedTests ? 1 : 0;
 }
 

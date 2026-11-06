@@ -1,0 +1,465 @@
+id: ci-github-actions
+title: CI pipelines with GitHub Actions
+branch: cicd
+prerequisites: [k8s-rbac-helm]
+sources:
+  - 06-CI-CD/01-CI-CD-Concepts
+  - 06-CI-CD/05-GitHub-Actions
+theory: |
+  **Continuous Integration** = every push is built and tested automatically, so `main` is always in a
+  known state. **Continuous Delivery** = every green build *could* go to production at the push of a
+  button; **Continuous Deployment** = it *does*, with no button.
+
+  A GitHub Actions **workflow** is a YAML file in `.github/workflows/`. It runs on **events** and is
+  made of **jobs** (parallel by default, each on a fresh runner machine) made of **steps**:
+
+  ```yaml
+  name: CI
+  on:
+    push:
+      branches: [main]            # only pushes to main
+  jobs:
+    test:
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v4          # an action: get the repo onto the runner
+        - uses: actions/setup-node@v4
+          with: { node-version: 20, cache: npm }
+        - run: npm ci                         # a shell command
+        - run: npm test
+    publish:
+      needs: test                             # wait for test, skip if it failed
+      runs-on: ubuntu-latest
+      steps: [...]
+  ```
+
+  - A step that exits non-zero fails the job; later steps are skipped.
+  - **Secrets** (`${{ secrets.NAME }}`) are set on the repo (`gh secret set NAME`), never committed, and
+    masked as `***` in logs. A secret that doesn't exist is just an **empty string**.
+  - Each job starts from a **clean machine** — files from another job only arrive via artifacts.
+
+  From the terminal: `gh run list` · `gh run watch` · `gh run view ID --log-failed` · `gh run rerun ID`.
+  This repo's tests run locally too: `npm ci && npm test` — reproduce before you push.
+missions:
+  - id: first-workflow
+    title: Your first green build
+    type: guided
+    prompt: |
+      `~/shop` is a clone of **github.com/acme/shop**. A teammate wrote a CI workflow and left it in
+      `~/ci.yml`, but it isn't in the repo yet.
+
+      **Put it where GitHub Actions looks for workflows, push it, and watch the first run go green.**
+    initialState:
+      gitHosted:
+        - url: https://github.com/acme/shop.git
+          message: Initial shop
+          files:
+            package.json: |
+              {
+                "name": "shop",
+                "version": "1.0.0",
+                "scripts": { "test": "jest", "lint": "eslint src", "build": "vite build" }
+              }
+            package-lock.json: |
+              { "name": "shop", "lockfileVersion": 3 }
+            src/cart.js: |
+              export function total(price, discount) {
+                return price - price * discount;
+              }
+            src/cart.test.js: |
+              import { total } from './cart';
+              test('applies a 10% discount', () => expect(total(100, 0.1)).toBe(90));
+            README.md: |
+              # Acme Shop
+      projects:
+        shop:
+          tests:
+            - { suite: src/cart.test.js, name: "cart › applies a 10% discount", file: src/cart.js, regex: 'price - price \* discount', failure: "expect(received).toBe(expected) // Object.is equality\n\nExpected: 90\nReceived: 110" }
+            - { suite: src/cart.test.js, name: "cart › keeps the price without a discount", file: src/cart.js, regex: "function total", failure: "" }
+      files:
+        /home/student/ci.yml: |
+          name: CI
+          on:
+            push:
+              branches: [main]
+          jobs:
+            test:
+              runs-on: ubuntu-latest
+              steps:
+                - uses: actions/checkout@v4
+                - uses: actions/setup-node@v4
+                  with:
+                    node-version: 20
+                    cache: npm
+                - run: npm ci
+                - run: npm test
+      setup:
+        - git clone -q https://github.com/acme/shop.git
+    hints:
+      - text: "Workflows live in `.github/workflows/` inside the repo: `mkdir -p shop/.github/workflows && cp ci.yml shop/.github/workflows/`"
+        cost: 5
+      - text: "`cd shop`, then `git add .github`, `git commit -m \"Add CI workflow\"`, `git push`."
+        cost: 5
+      - text: "`gh run list` shows the run; `gh run watch` follows it to the end."
+        cost: 5
+    validator:
+      checks:
+        - type: gitRemote
+          url: https://github.com/acme/shop.git
+          file: .github/workflows/ci.yml
+          regex: "npm test"
+        - type: ciRun
+          repo: https://github.com/acme/shop.git
+          workflow: CI
+          branch: main
+          status: success
+    xp: 50
+    par: 8
+    solution:
+      - mkdir -p shop/.github/workflows
+      - cp ci.yml shop/.github/workflows/
+      - cd shop
+      - git add .github
+      - git commit -qm "Add CI workflow"
+      - git push -q
+      - gh run watch
+      - gh run list
+    explain: |
+      The push was the trigger (`on: push` to `main`). GitHub read the workflow from **the commit you
+      pushed**, started a fresh Ubuntu runner, checked out that commit and ran the steps in order. A
+      workflow that only exists on your laptop does nothing; one on another branch only runs for
+      pushes to that branch.
+
+  - id: red-build
+    title: Fix the red build
+    type: guided
+    prompt: |
+      Someone pushed "Apply discounts at checkout" and the CI run on `main` is **red**.
+
+      **Find out why from the CI logs, reproduce it locally, fix the code, and get `main` green again.**
+    initialState:
+      gitHosted:
+        - url: https://github.com/acme/shop.git
+          message: Initial shop
+          files:
+            package.json: |
+              {
+                "name": "shop",
+                "version": "1.0.0",
+                "scripts": { "test": "jest", "build": "vite build" }
+              }
+            package-lock.json: |
+              { "name": "shop", "lockfileVersion": 3 }
+            src/cart.js: |
+              export function total(price, discount) {
+                return price - price * discount;
+              }
+            src/cart.test.js: |
+              import { total } from './cart';
+              test('applies a 10% discount', () => expect(total(100, 0.1)).toBe(90));
+            .github/workflows/ci.yml: |
+              name: CI
+              on:
+                push:
+                  branches: [main]
+              jobs:
+                test:
+                  runs-on: ubuntu-latest
+                  steps:
+                    - uses: actions/checkout@v4
+                    - uses: actions/setup-node@v4
+                      with:
+                        node-version: 20
+                        cache: npm
+                    - run: npm ci
+                    - run: npm test
+      projects:
+        shop:
+          tests:
+            - { suite: src/cart.test.js, name: "cart › applies a 10% discount", file: src/cart.js, regex: 'price - price \* discount', failure: "expect(received).toBe(expected) // Object.is equality\n\nExpected: 90\nReceived: 110\n\n  2 | test('applies a 10% discount', () => expect(total(100, 0.1)).toBe(90));\n    |                                                                ^" }
+            - { suite: src/cart.test.js, name: "cart › keeps the price without a discount", file: src/cart.js, regex: "function total", failure: "" }
+      setup:
+        - git clone -q https://github.com/acme/shop.git
+        - cd shop
+        - "sed -i 's/price - price/price + price/' src/cart.js"
+        - git commit -qam "Apply discounts at checkout"
+        - git push -q
+      cwd: /home/student/shop
+    hints:
+      - text: "`gh run list`, then `gh run view --log-failed` shows only the failing step's output."
+        cost: 5
+      - text: "Reproduce it here: `npm ci && npm test`. Expected 90, received 110 — look at `src/cart.js`."
+        cost: 5
+      - text: "A discount should be *subtracted*: `sed -i 's/price + price/price - price/' src/cart.js`, then commit, push and `gh run watch`."
+        cost: 10
+    validator:
+      checks:
+        - type: ciRun
+          repo: https://github.com/acme/shop.git
+          workflow: CI
+          branch: main
+          status: success
+    xp: 60
+    par: 9
+    solution:
+      - gh run list
+      - gh run view --log-failed
+      - npm ci
+      - npm test || true
+      - "sed -i 's/price + price/price - price/' src/cart.js"
+      - npm test
+      - git commit -qam "Fix discount calculation"
+      - git push -q
+      - gh run watch
+    explain: |
+      `--log-failed` cuts a long log down to the step that broke. Then the rule of CI debugging:
+      **reproduce locally** — the same `npm ci && npm test` the runner ran. Fixing it with a new commit
+      (rather than rewriting history) keeps the red run and the fix both visible in the history.
+
+  - id: secrets-needs
+    title: Publish the image — only when tests pass
+    type: guided
+    prompt: |
+      The `publish` job builds the Docker image and pushes it to `ghcr.io/acme/shop:<commit>`. It fails,
+      and worse: it runs even when tests fail.
+
+      1. Make `publish` **wait for `test`** (and not run if it fails).
+      2. Give the repo the **`REGISTRY_TOKEN` secret** it logs in with (any token value works here, e.g. `ghp_demo1234`).
+      3. Push and get a green run with the image in the registry.
+    initialState:
+      gitHosted:
+        - url: https://github.com/acme/shop.git
+          message: Initial shop
+          files:
+            package.json: |
+              {
+                "name": "shop",
+                "version": "1.0.0",
+                "scripts": { "test": "jest", "build": "vite build" }
+              }
+            package-lock.json: |
+              { "name": "shop", "lockfileVersion": 3 }
+            src/cart.js: |
+              export function total(price, discount) {
+                return price - price * discount;
+              }
+            Dockerfile: |
+              FROM nginx:1.27-alpine
+              COPY dist/ /usr/share/nginx/html/
+            .github/workflows/ci.yml: |
+              name: CI
+              on:
+                push:
+                  branches: [main]
+              jobs:
+                test:
+                  runs-on: ubuntu-latest
+                  steps:
+                    - uses: actions/checkout@v4
+                    - run: npm ci
+                    - run: npm test
+                publish:
+                  runs-on: ubuntu-latest
+                  steps:
+                    - uses: actions/checkout@v4
+                    - run: npm ci && npm run build
+                    - uses: docker/login-action@v3
+                      with:
+                        registry: ghcr.io
+                        username: ${{ github.actor }}
+                        password: ${{ secrets.REGISTRY_TOKEN }}
+                    - uses: docker/build-push-action@v6
+                      with:
+                        context: .
+                        push: true
+                        tags: ghcr.io/acme/shop:${{ github.sha }}
+      projects:
+        shop:
+          tests:
+            - { suite: src/cart.test.js, name: "cart › applies a 10% discount", file: src/cart.js, regex: 'price - price \* discount', failure: "Expected: 90\nReceived: 110" }
+      setup:
+        - git clone -q https://github.com/acme/shop.git
+        - cd shop
+        - "echo '## Releases are published to ghcr.io' >> README.md"
+        - git add README.md
+        - git commit -qm "Document releases"
+        - git push -q
+      cwd: /home/student/shop
+    hints:
+      - text: "`gh run view --log-failed`: the login step says `Username and password required` — the secret is empty because it doesn't exist."
+        cost: 5
+      - text: "`gh secret set REGISTRY_TOKEN --body ghp_demo1234`"
+        cost: 5
+      - text: "Add `needs: test` under `publish:` — `sed -i 's/^  publish:/  publish:\\n    needs: test/' .github/workflows/ci.yml` — then commit, push, `gh run watch`."
+        cost: 10
+    validator:
+      checks:
+        - type: gitRemote
+          url: https://github.com/acme/shop.git
+          file: .github/workflows/ci.yml
+          regex: "publish:\\n\\s+needs: \\[?test\\]?"
+        - type: ciRun
+          repo: https://github.com/acme/shop.git
+          workflow: CI
+          branch: main
+          status: success
+        - type: registryImage
+          ref: "ghcr.io/acme/shop:{sha}"
+          repo: https://github.com/acme/shop.git
+    xp: 70
+    par: 8
+    solution:
+      - gh run view --log-failed
+      - gh secret set REGISTRY_TOKEN --body ghp_demo1234
+      - "sed -i 's/^  publish:/  publish:\\n    needs: test/' .github/workflows/ci.yml"
+      - git commit -qam "Publish only after tests pass"
+      - git push -q
+      - gh run watch
+      - gh run view
+    explain: |
+      Jobs run **in parallel** unless `needs:` orders them — without it, a broken build could ship. A
+      missing secret doesn't fail loudly at the start: `${{ secrets.X }}` is simply empty, and the step
+      that uses it fails later. Notice the image tag is the **commit SHA**: one immutable image per
+      commit, which is what "build once, deploy many" needs.
+
+  - id: ci-github-check
+    title: "Knowledge check: CI and GitHub Actions"
+    type: quiz
+    prompt: Pipelines, triggers and secrets.
+    xp: 30
+    questions:
+      - kind: single
+        prompt: What's the difference between continuous delivery and continuous deployment?
+        options:
+          - Delivery builds, deployment tests
+          - With delivery a human approves the production release; with deployment every green build ships automatically
+          - They are the same thing
+          - Deployment only applies to containers
+        answer: 1
+      - kind: single
+        prompt: A workflow has jobs `lint` and `test` with no `needs`. How do they run?
+        options: [lint, then test, In parallel on separate runners, In one shared job, Only test runs]
+        answer: 1
+      - kind: single
+        prompt: "`password: ${{ secrets.DEPLOY_KEY }}` — the repo has no secret DEPLOY_KEY. What happens?"
+        options:
+          - The workflow is rejected as invalid
+          - The expression is an empty string; the step using it fails or misbehaves
+          - GitHub asks for the value
+          - The run is skipped
+        answer: 1
+      - kind: single
+        prompt: "`on: push: branches: [main]` — you push to `feature/login`. What runs?"
+        options: [The workflow, Nothing from this workflow, Only the first job, The workflow without secrets]
+        answer: 1
+      - kind: single
+        prompt: "The `build` job created `dist/`. Can the next job (`needs: build`) read it?"
+        options:
+          - Yes, jobs share a disk
+          - Only if build uploads it as an artifact and the next job downloads it
+          - Only on self-hosted runners
+          - Yes, but only for 5 minutes
+        answer: 1
+
+  - id: boss-silent-pipeline
+    title: "Boss: the pipeline went quiet"
+    type: boss
+    prompt: |
+      📉 Nothing has been published from **github.com/acme/storefront** since Monday. The workflow was
+      "cleaned up" last week. Your clone is in `~/storefront`.
+
+      **Make a push to `main` run the workflow green and publish `ghcr.io/acme/storefront:<commit>`.**
+      The registry token is already a repo secret — check its name with `gh secret list`.
+    initialState:
+      gitHosted:
+        - url: https://github.com/acme/storefront.git
+          message: Storefront
+          files:
+            package.json: |
+              {
+                "name": "storefront",
+                "version": "2.3.0",
+                "scripts": { "test": "jest", "build": "vite build" }
+              }
+            package-lock.json: |
+              { "name": "storefront", "lockfileVersion": 3 }
+            src/index.js: |
+              export const title = 'Acme storefront';
+            Dockerfile: |
+              FROM nginx:1.27-alpine
+              COPY dist/ /usr/share/nginx/html/
+            .github/workflows/release.yml: |
+              name: Release
+              on:
+                push:
+                  branches: [master]
+              jobs:
+                test:
+                  runs-on: ubuntu-latest
+                  steps:
+                    - uses: actions/checkout@v4
+                    - run: npm ci
+                    - run: npm test
+                publish:
+                  needs: tests
+                  runs-on: ubuntu-latest
+                  steps:
+                    - uses: actions/checkout@v4
+                    - run: npm ci && npm run build
+                    - uses: docker/login-action@v3
+                      with:
+                        registry: ghcr.io
+                        username: ${{ github.actor }}
+                        password: ${{ secrets.GHCR_TOKEN }}
+                    - uses: docker/build-push-action@v6
+                      with:
+                        context: .
+                        push: true
+                        tags: ghcr.io/acme/storefront:${{ github.sha }}
+      forge:
+        https://github.com/acme/storefront.git:
+          secrets:
+            REGISTRY_TOKEN: ghp_6f1c2a549d3e4b8aa1f07c2d9e4b5a63
+      projects:
+        storefront:
+          tests:
+            - { suite: src/index.test.js, name: "storefront › has a title", file: src/index.js, regex: "title", failure: "" }
+      setup:
+        - git clone -q https://github.com/acme/storefront.git
+        - cd storefront
+        - "echo '# Storefront' > README.md"
+        - git add README.md
+        - git commit -qm "Add README"
+        - git push -q
+      cwd: /home/student/storefront
+      setupAge: 7200
+    hints: []
+    validator:
+      checks:
+        - type: ciRun
+          repo: https://github.com/acme/storefront.git
+          workflow: Release
+          branch: main
+          status: success
+        - type: registryImage
+          ref: "ghcr.io/acme/storefront:{sha}"
+          repo: https://github.com/acme/storefront.git
+    xp: 200
+    par: 12
+    solution:
+      - gh run list
+      - gh run view
+      - "sed -i 's/needs: tests/needs: test/' .github/workflows/release.yml"
+      - "sed -i 's/branches: \\[master\\]/branches: [main]/' .github/workflows/release.yml"
+      - gh secret list
+      - "sed -i 's/secrets.GHCR_TOKEN/secrets.REGISTRY_TOKEN/' .github/workflows/release.yml"
+      - git commit -qam "Fix release workflow"
+      - git push -q
+      - gh run watch
+      - gh run view
+    explain: |
+      Three layers, each hiding the next: the file was **invalid** (`needs: tests` — no such job), so
+      GitHub reported a broken workflow; it only listened to **`master`** while the repo uses `main`, so
+      even a valid file would never have run; and it read **`GHCR_TOKEN`**, which doesn't exist, so the
+      login got an empty password. `gh run view` shows the annotation for each — read it before
+      guessing.
