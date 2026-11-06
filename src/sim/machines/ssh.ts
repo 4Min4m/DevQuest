@@ -68,7 +68,8 @@ export function sshConnect(state: SimState, dest: string, opts: { identity?: str
       );
       return denied();
     }
-    if (opts.identity.split('/').pop() !== key) return denied();
+    const content = (st as { content?: string }).content ?? '';
+    if (opts.identity.split('/').pop() !== key && !content.includes(key.replace(/-/g, ''))) return denied();
   }
   if (!m.machine!.sshUsers.includes(user) || !m.users.some((u) => u.name === user)) return denied();
   return { m, user };
