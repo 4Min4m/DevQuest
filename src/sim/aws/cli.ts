@@ -56,7 +56,7 @@ interface Resolved {
   source: string;
 }
 
-function resolveConfig(ctx: CommandContext, g: Globals): Resolved {
+export function resolveConfig(ctx: CommandContext, g: Globals): Resolved {
   const home = ctx.state.vars.HOME ?? '/';
   const creds = readIni(ctx, ctx.env.AWS_SHARED_CREDENTIALS_FILE ?? `${home}/.aws/credentials`);
   const conf = readIni(ctx, ctx.env.AWS_CONFIG_FILE ?? `${home}/.aws/config`);
@@ -82,7 +82,7 @@ function resolveConfig(ctx: CommandContext, g: Globals): Resolved {
 
 // ------------------------------------------------------------------ args
 
-interface Globals {
+export interface Globals {
   region?: string;
   profile?: string;
   output?: string;

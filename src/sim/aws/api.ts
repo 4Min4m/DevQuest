@@ -269,7 +269,7 @@ export function createVpc(c: Caller, cidr: string, tags: Tags = {}) {
   if (!validCidr(cidr)) throw new AwsError('InvalidParameterValue', `Value (${cidr}) for parameter cidrBlock is invalid. This is not a valid CIDR block.`, op);
   const bits = Number(cidr.split('/')[1]);
   if (bits < 16 || bits > 28) throw new AwsError('InvalidVpc.Range', `The CIDR '${cidr}' is invalid.`, op);
-  const vpc = { id: newId(c.aws, 'vpc'), cidr, isDefault: false, tags, region: c.region };
+  const vpc: import('./types').Vpc = { id: newId(c.aws, 'vpc'), cidr, isDefault: false, tags, region: c.region };
   c.aws.vpcs.push(vpc);
   c.aws.routeTables.push({ id: newId(c.aws, 'rtb'), vpcId: vpc.id, main: true, routes: [{ dest: cidr, target: 'local' }], subnets: [], tags: {}, region: c.region });
   c.aws.securityGroups.push(defaultSg(newId(c.aws, 'sg'), vpc.id, c.region));
@@ -395,7 +395,7 @@ export function createSecurityGroup(c: Caller, name: string, description: string
   const vpc = vpcId ? vpcOf(c, vpcId, op) : c.aws.vpcs.find((v) => v.isDefault && v.region === c.region);
   if (!vpc) throw new AwsError('VPCIdNotSpecified', 'No default VPC for this user', op);
   if (c.aws.securityGroups.some((g) => g.vpcId === vpc.id && g.name === name)) throw new AwsError('InvalidGroup.Duplicate', `The security group '${name}' already exists for VPC '${vpc.id}'`, op);
-  const g = { id: newId(c.aws, 'sg'), name, description, vpcId: vpc.id, ingress: [] as SgRule[], egress: [{ protocol: '-1', from: -1, to: -1, cidrs: ['0.0.0.0/0'], groups: [] }], tags, region: c.region };
+  const g: import('./types').SecurityGroup = { id: newId(c.aws, 'sg'), name, description, vpcId: vpc.id, ingress: [] as SgRule[], egress: [{ protocol: '-1', from: -1, to: -1, cidrs: ['0.0.0.0/0'], groups: [] }], tags, region: c.region };
   c.aws.securityGroups.push(g);
   return g;
 }
