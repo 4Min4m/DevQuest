@@ -2,6 +2,7 @@ import type { DockerState } from './docker/types';
 import type { NetState } from './netsim/types';
 import type { GitState } from './git/types';
 import type { KubeState } from './kube/types';
+import type { ForgeState, ProjectSpec, RegistryState } from './forge/types';
 import type { SystemdState } from './systemd/types';
 import { makeDir, makeFile } from './vfs/vfs';
 import type { DirNode, FsNode } from './vfs/types';
@@ -49,6 +50,16 @@ export interface SimState {
   git?: GitState;
   /** Resource limits (ulimit). */
   limits?: { nofileSoft: number; nofileHard: number };
+  /** GitHub / GitLab around the hosted remotes: settings, CI runs, caches. */
+  forge?: ForgeState;
+  /** The container registry `docker push` writes to (ghcr.io, docker.io, registry.gitlab.com). */
+  registry?: RegistryState;
+  /** How each project's simulated toolchain behaves, by package name. */
+  projects?: Record<string, ProjectSpec>;
+  /** Set on CI runner machines. */
+  runner?: { kind: 'github' | 'gitlab'; job: string; host: SimState };
+  /** Registry logins on this machine (docker login): registry → user. */
+  dockerAuths?: Record<string, string>;
   /** Set when this state is a container's view of the world (docker exec). */
   context?: ContainerContext;
 }

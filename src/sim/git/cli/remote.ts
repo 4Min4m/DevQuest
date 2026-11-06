@@ -1,11 +1,16 @@
 /** git clone, remote, fetch, pull, push — against simulated remotes (no network). */
 import { basename, joinPath, resolvePath } from '../../vfs/path';
+import { firePush, PushUpdate } from '../hooks';
+import type { SimState } from '../../state';
 import { copyReachable, shortSha } from '../objects';
 import { checkoutTree } from '../ops';
 import { commitTree, currentBranch, gitState, GitError, headSha, isAncestor, newRepo, revList, resolveRev } from '../repo';
 import type { Repo } from '../types';
 import { doMerge, startRebase } from './branch';
 import { GitCtx, parseArgs, repoOf } from './common';
+
+/** CI runs on the hosting side: pushes from a CI runner still belong to the learner's world. */
+const hostState = (s: SimState): SimState => s.runner?.host ?? s;
 
 const NOT_A_REPO = (name: string) =>
   `fatal: '${name}' does not appear to be a git repository\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.`;
@@ -297,6 +302,7 @@ export function gitPush(g: GitCtx): number {
   const rejected: { line: string; why: 'fetch first' | 'non-fast-forward' | 'stale info' | 'protected' }[] = [];
   let sent = 0;
   const upstreamSet: string[] = [];
+  const updates: PushUpdate[] = [];
   for (const spec of refspecs) {
     const force = p.flags.f || spec.startsWith('+');
     const [srcRaw, dstRaw] = spec.replace(/^\+/, '').split(':');
@@ -317,6 +323,7 @@ export function gitPush(g: GitCtx): number {
       if (remote.tags[src] === sha) continue;
       copyReachable(repo.objects, remote.objects, sha);
       remote.tags[src] = sha;
+      if (!p.flags['dry-run']) updates.push({ tag: src, after: sha });
       lines.push(` * [new tag]         ${src} -> ${src}`);
       sent++;
       continue;
@@ -344,6 +351,7 @@ export function gitPush(g: GitCtx): number {
       copyReachable(repo.objects, remote.objects, sha);
       remote.heads[dst] = sha;
       repo.remoteRefs[`${remoteName}/${dst}`] = sha;
+      updates.push({ branch: dst, before: old, after: sha });
     }
     if (!old) lines.push(` * [new branch]      ${label}`);
     else if (isAncestor(repo, old, sha)) lines.push(`   ${shortSha(old)}..${shortSha(sha)}  ${label}`);
@@ -368,9 +376,11 @@ export function gitPush(g: GitCtx): number {
     }
     const pre = why === 'protected' ? 'remote: error: GH006: Protected branch update failed for refs/heads/' + rejected[0].line.split('-> ')[1].split(' ')[0] + '.\nremote: error: Changes must be made through a pull request.\n' : '';
     g.err(`${pre}To ${url}\n${[...lines, ...rejected.map((r) => r.line)].join('\n')}\nerror: failed to push some refs to '${url}'\n${hint}`);
+    firePush(hostState(g.ctx.state), url, remote, updates);
     return 1;
   }
   g.note(`${sent ? progress(sent, 'Writing') : ''}To ${url}\n${lines.join('\n')}\n`);
   for (const u of upstreamSet) g.out(`branch '${u}' set up to track '${remoteName}/${repo.branches[u].merge.replace(/^refs\/heads\//, '')}'.\n`);
+  firePush(hostState(g.ctx.state), url, remote, updates);
   return 0;
 }

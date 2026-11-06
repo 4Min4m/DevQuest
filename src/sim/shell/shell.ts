@@ -23,13 +23,13 @@ type Sink =
 const NOT_SIMULATED = new Set([
   'awk', 'less', 'more', 'su', 'apt', 'apt-get', 'yum', 'ssh', 'scp', 'wget', 'tar', 'gzip',
   'ln', 'stat', 'file', 'htop', 'tr', 'cut', 'xargs', 'diff', 'which', 'man', 'date',
-  'python', 'python3', 'node', 'make', 'bash', 'sh', 'docker-compose', 'minikube', 'kind', 'k9s',
+  'python', 'python3', 'make', 'bash', 'sh', 'docker-compose', 'minikube', 'kind', 'k9s',
   'tcpdump', 'strace', 'iostat', 'iotop', 'mpstat', 'pidstat', 'perf', 'iftop', 'nethogs', 'mtr',
   'iptables', 'nft', 'lsblk', 'mount', 'ncdu', 'watch', 'nc', 'telnet', 'dmesg',
 ]);
 
 /** Commands that don't exist inside containers. */
-const HOST_ONLY = new Set(['docker', 'git', 'kubectl', 'helm']);
+const HOST_ONLY = new Set(['docker', 'git', 'kubectl', 'helm', 'gh', 'glab']);
 
 /** Pseudo-PID of the interactive shell (`$$`). */
 const SHELL_PID = 1001;

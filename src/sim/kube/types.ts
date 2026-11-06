@@ -163,4 +163,6 @@ export interface KubeState {
   volumes?: Record<string, DirNode>;
   /** Extra CPU demand in millicores on workloads ("ns/name"), e.g. traffic for the HPA. */
   load?: Record<string, number>;
+  /** Image references pushed to the registry (full refs); wildcard images (`repo:*`) need one. */
+  pushed?: string[];
 }

@@ -498,6 +498,11 @@ export function createKubeState(now: number): KubeState {
 /** The cluster behind `kubectl`, created on first use (and caught up to now). */
 export function clusterOf(state: SimState): KubeState {
   const host = state.context?.host ?? state;
-  if (!host.kube) host.kube = createKubeState(host.clock);
+  if (!host.kube) {
+    host.kube = createKubeState(host.clock);
+    // Images pushed before the cluster existed are pullable too.
+    const pushed = Object.keys(host.registry?.images ?? {});
+    if (pushed.length) host.kube.pushed = pushed;
+  }
   return host.kube;
 }

@@ -371,7 +371,7 @@ export function buildImage(ctx: BuildContext, req: BuildRequest): BuildOutput {
 
   const id = hexId('image-build-' + content.join('\u0000') + JSON.stringify(config));
   progress.push(pad(' => exporting to image', '0.1s'), pad(' => => exporting layers', '0.1s'), pad(` => => writing image sha256:${id}`, '0.0s'));
-  if (req.tag) progress.push(pad(` => => naming to docker.io/library/${tag.repository}:${tag.tag}`, '0.0s'));
+  if (req.tag) progress.push(pad(` => => naming to ${/^[^/]+[.:][^/]*\//.test(tag.repository) ? '' : tag.repository.includes('/') ? 'docker.io/' : 'docker.io/library/'}${tag.repository}:${tag.tag}`, '0.0s'));
   progress.unshift(`[+] Building 2.4s (${stepNo + 3}/${stepNo + 3}) FINISHED`.padEnd(70) + 'docker:default');
 
   const images = ctx.engine.d.images;

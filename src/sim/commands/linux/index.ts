@@ -1,4 +1,5 @@
 import type { CommandDef } from '../../shell/types';
+import { bracket, testCmd } from './test';
 import { cat } from './cat';
 import { cd, pwd } from './cd';
 import { chmod } from './chmod';
@@ -28,5 +29,5 @@ import { wc } from './wc';
 export const linuxCommands: CommandDef[] = [
   ls, cd, pwd, cat, echo, touch, mkdir, rm, cp, mv, head, tail, grep, find, wc, sort, uniq,
   sed, tee, chmod, chown, ps, kill, whoami, id, env, printenv, exportCmd, unset, df, du, curl,
-  help, history, clear, trueCmd, falseCmd, sleep, exit, nano, vi, vim,
+  help, history, clear, trueCmd, falseCmd, sleep, exit, nano, vi, vim, testCmd, bracket,
 ];

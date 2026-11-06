@@ -1,6 +1,7 @@
 /** The `helm` CLI (v3.16) against the simulated cluster: charts on disk or in an offline repo, releases as Secrets. */
 import { parse, stringify } from 'yaml';
 import { homeOf } from '../shell/identity';
+import { runnerClusterAccess } from '../ci/access';
 import type { CommandContext, CommandDef } from '../shell/types';
 import { joinPath, resolvePath } from '../vfs/path';
 import { kctx, KCtx } from '../kube/cli/common';
@@ -410,6 +411,10 @@ function needRelease(h: HCtx, name: string | undefined, cmd: string): ReleaseRec
 }
 
 function run(ctx: CommandContext, sub: string, argv: string[]): number {
+  if (['install', 'i', 'upgrade', 'rollback', 'uninstall', 'delete', 'del', 'un', 'list', 'ls', 'history', 'hist', 'status', 'get'].includes(sub)) {
+    const denied = runnerClusterAccess(ctx, 'helm');
+    if (denied) throw new HelmError(denied.replace(/^Error: /, ''));
+  }
   switch (sub) {
     case 'install':
     case 'i': {

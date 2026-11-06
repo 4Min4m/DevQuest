@@ -1,4 +1,7 @@
 import { createShell } from '../sim';
+import { forgeRepo, registryPush } from '../sim/forge';
+import { blobSha, treeFromFlat, writeBlob, writeCommit } from '../sim/git/objects';
+import type { Repo } from '../sim/git/types';
 import { newRepo } from '../sim/git';
 import { parseAllDocuments } from 'yaml';
 import { clusterOf, putObj } from '../sim/kube/cluster';
@@ -108,7 +111,19 @@ export function buildInitialState(spec: InitialStateSpec = {}): SimState {
   for (const h of spec.gitHosted ?? []) {
     const remote = newRepo(h.url, h.branch ?? 'main', true);
     (state.git ??= { repos: {}, remotes: {} }).remotes[h.url] = remote;
+    if (h.files) seedRemote(remote, h.branch ?? 'main', h.files, h.message ?? 'Initial commit', state.clock);
   }
+  if (spec.projects) state.projects = { ...(state.projects ?? {}), ...spec.projects };
+  for (const [url, f] of Object.entries(spec.forge ?? {})) {
+    const repo = forgeRepo(state, url);
+    for (const [k, v] of Object.entries(f.secrets ?? {})) repo.secrets[k] = { value: v, updatedAt: state.clock - 86400_000 };
+    for (const [k, v] of Object.entries(f.variables ?? {})) repo.variables[k] = typeof v === 'string' ? { value: v, updatedAt: state.clock - 86400_000 } : { ...v, updatedAt: state.clock - 86400_000 };
+    for (const [env, e] of Object.entries(f.environments ?? {})) {
+      repo.environments[env] = { secrets: Object.fromEntries(Object.entries(e.secrets ?? {}).map(([k, v]) => [k, { value: v, updatedAt: state.clock - 86400_000 }])) };
+    }
+    if (f.runnerTags) repo.runnerTags = [...f.runnerTags];
+  }
+  for (const ref of spec.registryImages ?? []) registryPush(state, ref, blobSha(ref) + blobSha(ref + '!').slice(0, 24));
 
   if (spec.kubeImages || spec.kubeManifests || spec.kubeLoad) {
     const ks = clusterOf(state);
@@ -175,4 +190,13 @@ export function buildInitialState(spec: InitialStateSpec = {}): SimState {
   }
   if (!cwdOk) throw new Error(`initialState: cwd '${state.cwd}' is not an accessible directory`);
   return state;
+}
+
+/** Give a hosted remote an initial commit with these files. */
+function seedRemote(remote: Repo, branch: string, files: Record<string, string>, message: string, clock: number): void {
+  const flat: Record<string, { sha: string; mode: '100644' | '100755' }> = {};
+  for (const [path, content] of Object.entries(files)) flat[path] = { sha: writeBlob(remote.objects, content), mode: path.endsWith('.sh') ? '100755' : '100644' };
+  const who = { name: 'Acme Dev', email: 'dev@acme.test', time: Math.floor(clock / 1000) - 86400 };
+  const sha = writeCommit(remote.objects, { tree: treeFromFlat(remote.objects, flat), parents: [], author: who, committer: who, message });
+  remote.heads[branch] = sha;
 }

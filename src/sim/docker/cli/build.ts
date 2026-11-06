@@ -1,6 +1,7 @@
 import type { CommandContext } from '../../shell/types';
 import { BuildError, buildImage } from '../build';
 import { DockerError } from '../engine';
+import { parseRef } from '../catalog';
 import { connect, parseFlags, UsageError, usage } from './common';
 
 /** `docker build [-t name:tag] [-f Dockerfile] PATH` */
@@ -9,8 +10,8 @@ export function dockerBuild(ctx: CommandContext, cmd = 'build'): number {
   try {
     p = parseFlags(ctx.args, {
       flags: {
-        '-t': { value: true, key: 'tag' },
-        '--tag': { value: true, key: 'tag' },
+        '-t': { value: true, key: 'tag', multi: true },
+        '--tag': { value: true, key: 'tag', multi: true },
         '-f': { value: true, key: 'file' },
         '--file': { value: true, key: 'file' },
         '-q': { key: 'quiet' },
@@ -33,8 +34,13 @@ export function dockerBuild(ctx: CommandContext, cmd = 'build'): number {
   try {
     const { image, progress } = buildImage(
       { engine, host: ctx.state, spawn: (s) => ctx.shell.spawn(s) },
-      { contextDir, dockerfile, tag: typeof p.opts.tag === 'string' ? p.opts.tag : undefined },
+      { contextDir, dockerfile, tag: p.multi.tag?.[0] },
     );
+    for (const extra of (p.multi.tag ?? []).slice(1)) {
+      const { repository, tag } = parseRef(extra);
+      engine.d.images = engine.d.images.filter((i) => !(i.repository === repository && i.tag === tag));
+      engine.d.images.push({ ...structuredClone({ ...image, fs: undefined }), repository, tag, fs: image.fs });
+    }
     if (p.opts.quiet) ctx.out(`sha256:${image.id}\n`);
     else ctx.note(progress.join('\n') + '\n');
     return 0;

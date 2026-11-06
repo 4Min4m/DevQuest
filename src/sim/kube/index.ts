@@ -3,6 +3,7 @@ import { settle } from './controllers';
 import { KubectlError, kctx } from './cli/common';
 import { impersonate, kubectlAuth, kubectlAutoscale, kubectlCordon, kubectlDrain, kubectlTaint, takeImpersonation } from './cli/admin';
 import { ADMIN } from './rbac';
+import { runnerClusterAccess } from '../ci/access';
 import { kubectlDescribe, kubectlGet } from './cli/get';
 import { kubectlApiResources, kubectlClusterInfo, kubectlConfig, kubectlExec, kubectlLogs, kubectlPortForward, kubectlTop, kubectlVersion } from './cli/pods';
 import { kubectlApply, kubectlCreate, kubectlDelete, kubectlEdit, kubectlExpose, kubectlLabel, kubectlRollout, kubectlRun, kubectlScale, kubectlSet } from './cli/workloads';
@@ -92,6 +93,11 @@ export const kubectl: CommandDef = {
 };
 
 function dispatch(ctx: CommandContext, sub: string, rawArgs: string[]): number {
+      const denied = runnerClusterAccess(ctx, 'kubectl');
+      if (denied) {
+        ctx.err(denied + '\n');
+        return 1;
+      }
       const imp = takeImpersonation(rawArgs);
       const args = imp.args;
       const k = kctx(ctx, imp.as === null ? ADMIN : impersonate(imp.as, imp.groups));

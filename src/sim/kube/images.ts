@@ -84,6 +84,13 @@ export function resolveImage(ks: KubeState, ref: string): PullResult {
   const custom = ks.images[ref] ?? Object.entries(ks.images).find(([k]) => fullRef(k) === full)?.[1] ?? SYSTEM_IMAGES[ref];
   if (custom) return { ok: true, image: { spec: custom, size: 48_211_334 } };
   const base = `failed to pull and unpack image "${full}": failed to resolve reference "${full}"`;
+  // `repo:*` images exist for every tag pushed to the registry (e.g. by a CI pipeline).
+  const repoOf = (r: string) => fullRef(r.replace(/:\*$/, ':x')).replace(/:[^:/]+$/, '');
+  const wildcard = Object.entries(ks.images).find(([k]) => k.endsWith(':*') && repoOf(k) === full.replace(/:[^:/]+$/, ''));
+  if (wildcard) {
+    if ((ks.pushed ?? []).includes(full)) return { ok: true, image: { spec: wildcard[1], size: 52_418_903 } };
+    return { ok: false, message: `${base}: ${full}: not found` };
+  }
   if (full.startsWith('docker.io/')) {
     const { repository, tag } = parseRef(full);
     const cat = findCatalog(repository);

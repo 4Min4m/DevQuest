@@ -1,4 +1,5 @@
 import type { CommandContext, CommandDef } from '../../shell/types';
+import { dockerLogin, dockerLogout, dockerPush, dockerTag } from './registry';
 import { dockerExec, dockerKill, dockerLogs, dockerPort, dockerPs, dockerRestart, dockerRm, dockerStart, dockerStop } from './containers';
 import { dockerBuild } from './build';
 import { dockerCompose } from './compose';
@@ -28,6 +29,10 @@ const TOP: Record<string, Handler> = {
   network: dockerNetwork,
   build: dockerBuild,
   compose: dockerCompose,
+  tag: dockerTag,
+  push: dockerPush,
+  login: dockerLogin,
+  logout: dockerLogout,
 };
 
 /** `docker container ...` / `docker image ...` management commands map onto the classic ones. */
@@ -56,13 +61,13 @@ const IMAGE: Record<string, Handler> = {
   rm: dockerRmi,
   remove: dockerRmi,
   build: dockerBuild,
+  tag: dockerTag,
+  push: dockerPush,
   inspect: (ctx, cmd) => dockerInspect(ctx, cmd, 'image'),
 };
 
 /** Real docker commands not simulated (yet). */
 const COMING_LATER: Record<string, string> = {
-  push: 'a registry (DevOps Quest works offline)',
-  login: 'a registry (DevOps Quest works offline)',
   swarm: 'Swarm mode',
 };
 

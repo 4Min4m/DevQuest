@@ -665,6 +665,8 @@ function syncMounts(ks: KubeState, pod: KObj, c: J, fs: DirNode): void {
   }
 }
 
+const imageTag = (ref: string) => /:([^/:@]+)$/.exec(ref)?.[1] ?? 'latest';
+
 function expand(line: string, env: Record<string, string>, extra: Record<string, string>): string {
   return line.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_m, k: string) => env[k] ?? '').replace(/\{(\w+)\}/g, (m, k: string) => extra[k] ?? m);
 }
@@ -689,7 +691,7 @@ const SHELLS = new Set(['sh', '/bin/sh', 'bash', '/bin/bash', 'ash', 'python3', 
 /** Decide what the container's main process does. */
 function startProcess(host: SimState, _ks: KubeState, pod: KObj, c: J, image: ResolvedImage, env: Record<string, string>, fs: DirNode, now: number): StartOutcome {
   const app = image.spec;
-  const extra = { time: nginxTime(now), ip: pod.status?.podIP ?? '', pod: pod.metadata.name };
+  const extra = { time: nginxTime(now), ip: pod.status?.podIP ?? '', pod: pod.metadata.name, tag: imageTag(String(c.image)) };
   if (app.shellImage) {
     // Docker semantics: `command` replaces ENTRYPOINT, `args` replaces CMD.
     let full = [...(c.command ?? app.entrypoint ?? []), ...(c.args ?? (c.command ? [] : app.cmd ?? []))];
@@ -795,7 +797,7 @@ export function podHttp(ks: KubeState, pod: KObj, port: number, path: string, no
       const route = app.http[path] ?? app.http[path.replace(/\/$/, '')];
       if (route) {
         status = route.status ?? 200;
-        body = expand(route.body, cs.env, { pod: pod.metadata.name, ip, port: String(port) });
+        body = expand(route.body, cs.env, { pod: pod.metadata.name, ip, port: String(port), tag: imageTag(String(c.image)) });
       } else body = '404 page not found\n';
     } else {
       return { ok: false, error: `Get "http://${ip}:${port}${path}": EOF`, errorCode: 52 };
