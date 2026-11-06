@@ -7,7 +7,7 @@ import { chown } from './chown';
 import { cp } from './cp';
 import { curl } from './curl';
 import { df, du } from './disk';
-import { echo } from './echo';
+import { echo, printf } from './echo';
 import { env, exportCmd, printenv, unset } from './env';
 import { find } from './find';
 import { grep } from './grep';
@@ -27,7 +27,7 @@ import { id, whoami } from './user';
 import { wc } from './wc';
 
 export const linuxCommands: CommandDef[] = [
-  ls, cd, pwd, cat, echo, touch, mkdir, rm, cp, mv, head, tail, grep, find, wc, sort, uniq,
+  ls, cd, pwd, cat, echo, printf, touch, mkdir, rm, cp, mv, head, tail, grep, find, wc, sort, uniq,
   sed, tee, chmod, chown, ps, kill, whoami, id, env, printenv, exportCmd, unset, df, du, curl,
   help, history, clear, trueCmd, falseCmd, sleep, exit, nano, vi, vim, testCmd, bracket,
 ];

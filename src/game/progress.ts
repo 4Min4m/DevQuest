@@ -314,7 +314,10 @@ export const BRANCHES: { id: BranchId; title: string; icon: string; track: Track
   { id: 'cicd-gitlab', title: 'Pipeline Design & GitLab CI', icon: '🦊', track: 'delivery' },
   { id: 'deploy-strategies', title: 'Deployment Strategies', icon: '🐤', track: 'delivery' },
   { id: 'gitops', title: 'GitOps with Argo CD', icon: '🐙', track: 'delivery' },
-  { id: 'cloud-iac', title: 'Terraform & Cloud', icon: '☁️', track: 'cloud' },
+  { id: 'cloud-aws', title: 'AWS Fundamentals', icon: '☁️', track: 'cloud' },
+  { id: 'cloud-iac', title: 'Terraform Basics', icon: '🧱', track: 'cloud' },
+  { id: 'iac-patterns', title: 'Terraform Patterns & State', icon: '🗂️', track: 'cloud' },
+  { id: 'config-mgmt', title: 'Ansible', icon: '📜', track: 'cloud' },
   { id: 'observability', title: 'Observability', icon: '📊', track: 'operations' },
   { id: 'security', title: 'Security', icon: '🛡️', track: 'operations' },
 ];

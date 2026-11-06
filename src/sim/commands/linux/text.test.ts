@@ -241,3 +241,16 @@ describe('uniq', () => {
     expect(makeShell().run('uniq nope')).toMatchObject({ err: 'uniq: nope: No such file or directory\n', code: 1 });
   });
 });
+
+describe('printf', () => {
+  it('formats like bash', () => {
+    const t = makeShell();
+    expect(t.run("printf 'a\\nb\\n'").out).toBe('a\nb\n');
+    expect(t.run("printf '%s=%d\\n' x 5 y 7").out).toBe('x=5\ny=7\n');
+    expect(t.run("printf '%-5s|%05.1f|%x\\n' ab 3.14159 255").out).toBe('ab   |003.1|ff\n');
+    expect(t.run("printf '100%%\\n'").out).toBe('100%\n');
+    const bad = t.run("printf '%d\\n' abc");
+    expect(bad.code).toBe(1);
+    expect(bad.err).toBe('bash: printf: abc: invalid number\n');
+  });
+});

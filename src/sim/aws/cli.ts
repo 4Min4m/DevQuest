@@ -167,9 +167,17 @@ export function shorthand(s: string): Record<string, unknown> {
 function tagsFrom(specs: string[] | undefined, type: string): Tags {
   const tags: Tags = {};
   for (const s of specs ?? []) {
-    if (s.trim().startsWith('[') || s.trim().startsWith('{')) {
-      const j = JSON.parse(s);
-      for (const spec of Array.isArray(j) ? j : [j]) if (!spec.ResourceType || spec.ResourceType === type) for (const t of spec.Tags ?? []) tags[t.Key] = t.Value;
+    let j: unknown;
+    try {
+      j = s.trim().startsWith('[') || s.trim().startsWith('{') ? JSON.parse(s) : undefined;
+    } catch {
+      j = undefined;
+    }
+    if (j !== undefined) {
+      for (const spec of (Array.isArray(j) ? j : [j]) as { ResourceType?: string; Tags?: { Key: string; Value: string }[]; Key?: string; Value?: string }[]) {
+        if (spec.Key) tags[spec.Key] = spec.Value ?? '';
+        if (!spec.ResourceType || spec.ResourceType === type) for (const t of spec.Tags ?? []) tags[t.Key] = t.Value;
+      }
       continue;
     }
     const rt = /ResourceType=([\w-]+)/.exec(s)?.[1];

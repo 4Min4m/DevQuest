@@ -1,0 +1,446 @@
+id: ansible
+title: Configuration management with Ansible
+branch: config-mgmt
+prerequisites: [systemd]
+sources:
+  - 08-Infrastructure-as-Code/04-Ansible
+  - 08-Infrastructure-as-Code/01-IaC-Concepts
+theory: |
+  Terraform *creates* servers; **Ansible configures** them — packages, files, services, users.
+  It's **agentless**: it connects over SSH and runs small Python modules on each host, so the only
+  requirement is SSH access and Python.
+
+  **Inventory** — which hosts, in which groups:
+  ```ini
+  [web]
+  web1 ansible_host=10.0.2.11
+  web2
+
+  [db]
+  db1
+
+  [all:vars]
+  ansible_user=ubuntu
+  ```
+  `ansible.cfg` in the project sets defaults (`inventory = inventory.ini`). `ansible-inventory
+  --graph` shows what Ansible parsed. **Host patterns:** `all`, `web`, `web:db`, `all:!db`.
+
+  **Ad-hoc commands** for one-off jobs: `ansible all -m ping`, `ansible web -a uptime`,
+  `ansible web -b -m apt -a "name=htop update_cache=yes"` (`-b` = become root via sudo).
+
+  **Playbooks** describe the desired state, play by play:
+  ```yaml
+  - name: Web servers
+    hosts: web
+    become: true
+    tasks:
+      - name: Install nginx
+        ansible.builtin.apt: { name: nginx, update_cache: true }
+      - name: Deploy the page
+        ansible.builtin.template: { src: index.html.j2, dest: /var/www/html/index.html }
+        notify: Reload nginx          # runs the handler only when this task changed something
+    handlers:
+      - name: Reload nginx
+        ansible.builtin.service: { name: nginx, state: reloaded }
+  ```
+  **Idempotency:** modules check before they act, so a second run reports `changed=0`. Prefer
+  modules (`apt`, `copy`, `template`, `service`, `lineinfile`, `user`) over `command`/`shell`, which
+  always report "changed". `--check --diff` previews a run without changing anything.
+
+  **Variables** live in the play (`vars:`), `group_vars/<group>.yml`, `host_vars/<host>.yml` and
+  `-e` (highest). Templates use Jinja2: `{{ inventory_hostname }}`, `{% for %}`, filters like
+  `| default('x')`. **Roles** package tasks, handlers, templates and defaults for reuse.
+missions:
+  - id: ansible-ping
+    title: Write an inventory
+    type: guided
+    prompt: |
+      Three fresh servers are up: `web1`, `web2` and `db1` (their names resolve). You log in to all of
+      them as `ubuntu`.
+
+      **Write `~/infra/inventory.ini` with a `web` group (web1, web2) and a `db` group (db1), set the
+      remote user for all hosts, and prove Ansible reaches every host with the `ping` module.**
+    initialState:
+      cwd: /home/student/infra
+      machines:
+        - { hostname: web1, ip: 10.0.2.11 }
+        - { hostname: web2, ip: 10.0.2.12 }
+        - { hostname: db1, ip: 10.0.2.21 }
+      files:
+        /home/student/infra/ansible.cfg: |
+          [defaults]
+          inventory = inventory.ini
+          host_key_checking = False
+    hints:
+      - text: "Groups are `[web]` / `[db]` sections, one host per line; `[all:vars]` holds `ansible_user=ubuntu`."
+        cost: 10
+      - text: "`printf '[web]\\nweb1\\nweb2\\n\\n[db]\\ndb1\\n\\n[all:vars]\\nansible_user=ubuntu\\n' > inventory.ini`, then `ansible-inventory --graph`."
+        cost: 10
+      - text: "`ansible all -m ping` should print `SUCCESS` and `\"ping\": \"pong\"` for each host."
+        cost: 5
+    validator:
+      checks:
+        - type: fileContains
+          path: /home/student/infra/inventory.ini
+          regex: \[web\]
+        - type: fileContains
+          path: /home/student/infra/inventory.ini
+          regex: \[db\]
+        - type: outputContains
+          text: "web1 | SUCCESS"
+        - type: outputContains
+          text: "web2 | SUCCESS"
+        - type: outputContains
+          text: "db1 | SUCCESS"
+    xp: 50
+    par: 4
+    solution:
+      - printf '[web]\nweb1\nweb2\n\n[db]\ndb1\n\n[all:vars]\nansible_user=ubuntu\n' > inventory.ini
+      - ansible-inventory --graph
+      - ansible all -m ping
+    explain: |
+      `ping` isn't ICMP — it's a module that logs in over SSH, finds Python and answers `pong`, so it
+      proves the whole chain works. Without `ansible_user=ubuntu` Ansible logs in as your local user
+      (`student`) and every host is `UNREACHABLE` with `Permission denied (publickey)`.
+
+  - id: ansible-adhoc
+    title: Ad-hoc commands
+    type: guided
+    prompt: |
+      **Check the uptime of every server, then install `htop` on the web servers only** — using ad-hoc
+      `ansible` commands, not ssh loops.
+    initialState:
+      cwd: /home/student/infra
+      machines:
+        - { hostname: web1, ip: 10.0.2.11 }
+        - { hostname: web2, ip: 10.0.2.12 }
+        - { hostname: db1, ip: 10.0.2.21 }
+      files:
+        /home/student/infra/ansible.cfg: |
+          [defaults]
+          inventory = inventory.ini
+        /home/student/infra/inventory.ini: |
+          [web]
+          web1
+          web2
+
+          [db]
+          db1
+
+          [all:vars]
+          ansible_user=ubuntu
+    hints:
+      - text: "`ansible all -a uptime` (the default module is `command`)."
+        cost: 5
+      - text: "Installing needs root (`-b`) and fresh package lists: `ansible web -b -m apt -a \"name=htop update_cache=yes\"`."
+        cost: 10
+    validator:
+      checks:
+        - type: commandUsed
+          command: ansible
+          argsInclude: [uptime]
+        - type: onHost
+          host: web1
+          check: { type: packageInstalled, package: htop }
+        - type: onHost
+          host: web2
+          check: { type: packageInstalled, package: htop }
+        - type: not
+          check:
+            type: onHost
+            host: db1
+            check: { type: packageInstalled, package: htop }
+          message: Only the web servers should get htop.
+    xp: 50
+    par: 3
+    solution:
+      - ansible all -a uptime
+      - ansible web -b -m apt -a "name=htop update_cache=yes"
+    explain: |
+      Without `-b` the apt module fails to lock `/var/lib/apt/lists` (permission denied); without
+      `update_cache` a fresh cloud image has no package lists and reports `No package matching 'htop'`.
+      Run the same command again: every host says `SUCCESS` with `"changed": false` — the module
+      checked first.
+
+  - id: ansible-playbook
+    title: Playbooks, handlers and idempotency
+    type: guided
+    prompt: |
+      `~/infra/site.yml` installs nginx on the web servers and deploys a templated page.
+
+      **Apply it. Then change the play's `greeting` variable to `Welcome`, preview the change with
+      `--check --diff`, apply it, and run the playbook once more to prove nothing changes on a
+      rerun.**
+    initialState:
+      cwd: /home/student/infra
+      machines:
+        - { hostname: web1, ip: 10.0.2.11 }
+        - { hostname: web2, ip: 10.0.2.12 }
+        - { hostname: db1, ip: 10.0.2.21 }
+      files:
+        /home/student/infra/ansible.cfg: |
+          [defaults]
+          inventory = inventory.ini
+        /home/student/infra/inventory.ini: |
+          [web]
+          web1
+          web2
+
+          [db]
+          db1
+
+          [all:vars]
+          ansible_user=ubuntu
+        /home/student/infra/site.yml: |
+          - name: Web servers
+            hosts: web
+            become: true
+            vars:
+              greeting: Hello
+
+            tasks:
+              - name: Install nginx
+                ansible.builtin.apt:
+                  name: nginx
+                  state: present
+                  update_cache: true
+
+              - name: Deploy the home page
+                ansible.builtin.template:
+                  src: index.html.j2
+                  dest: /var/www/html/index.html
+                  mode: "0644"
+                notify: Reload nginx
+
+              - name: nginx is running and enabled
+                ansible.builtin.service:
+                  name: nginx
+                  state: started
+                  enabled: true
+
+            handlers:
+              - name: Reload nginx
+                ansible.builtin.service:
+                  name: nginx
+                  state: reloaded
+        /home/student/infra/templates/index.html.j2: |
+          <h1>{{ greeting }} from {{ inventory_hostname }}</h1>
+          <p>Configured by Ansible on {{ ansible_distribution }} {{ ansible_distribution_version }}</p>
+    hints:
+      - text: "`ansible-playbook site.yml` — read the PLAY RECAP: `changed=` per host."
+        cost: 5
+      - text: "`sed -i 's/greeting: Hello/greeting: Welcome/' site.yml`, then `ansible-playbook site.yml --check --diff`."
+        cost: 5
+      - text: "Apply for real, then once more: the last recap should show `changed=0` everywhere."
+        cost: 5
+    validator:
+      checks:
+        - type: ansibleRun
+          playbook: site.yml
+          check: true
+          message: Preview the change with --check --diff before applying it.
+        - type: ansibleRun
+          playbook: site.yml
+          changed: 0
+          minRuns: 3
+          message: The final run should change nothing (changed=0) — that's idempotency.
+        - type: httpResponds
+          url: http://web1
+          contains: Welcome from web1
+        - type: httpResponds
+          url: http://web2
+          contains: Welcome from web2
+    xp: 80
+    par: 6
+    solution:
+      - ansible-playbook site.yml
+      - "sed -i 's/greeting: Hello/greeting: Welcome/' site.yml"
+      - ansible-playbook site.yml --check --diff
+      - ansible-playbook site.yml
+      - ansible-playbook site.yml
+    explain: |
+      The handler ran only when the template task reported `changed` — once on the first run, once
+      after your edit, never on the rerun. `--check` asks every module "what would you do?" and
+      `--diff` prints the file changes, which makes it the Ansible equivalent of `terraform plan`.
+
+  - id: ansible-group-vars
+    title: Group variables and roles
+    type: free
+    prompt: |
+      `motd.yml` applies the `motd` role (it writes `/etc/motd` from `motd_text`) to every server;
+      `group_vars/all.yml` sets the default text.
+
+      **Give the database servers their own message — `DB server - authorized use only` — without
+      changing the playbook or the role, and apply it.** The web servers keep the default.
+    initialState:
+      cwd: /home/student/infra
+      machines:
+        - { hostname: web1, ip: 10.0.2.11 }
+        - { hostname: web2, ip: 10.0.2.12 }
+        - { hostname: db1, ip: 10.0.2.21 }
+      files:
+        /home/student/infra/ansible.cfg: |
+          [defaults]
+          inventory = inventory.ini
+        /home/student/infra/inventory.ini: |
+          [web]
+          web1
+          web2
+
+          [db]
+          db1
+
+          [all:vars]
+          ansible_user=ubuntu
+        /home/student/infra/motd.yml: |
+          - name: Login banner
+            hosts: all
+            become: true
+            gather_facts: false
+            roles:
+              - motd
+        /home/student/infra/group_vars/all.yml: |
+          motd_text: "Managed by Ansible - changes will be overwritten"
+        /home/student/infra/roles/motd/defaults/main.yml: |
+          motd_text: "Welcome"
+        /home/student/infra/roles/motd/tasks/main.yml: |
+          - name: Write /etc/motd
+            ansible.builtin.copy:
+              content: "{{ motd_text }}\n"
+              dest: /etc/motd
+              mode: "0644"
+    hints: []
+    validator:
+      checks:
+        - type: onHost
+          host: db1
+          check: { type: fileContains, path: /etc/motd, text: DB server - authorized use only }
+        - type: onHost
+          host: web1
+          check: { type: fileContains, path: /etc/motd, text: Managed by Ansible }
+        - type: ansibleRun
+          playbook: motd.yml
+      guards:
+        - type: fileContains
+          path: /home/student/infra/motd.yml
+          text: "- motd"
+          message: Keep the playbook as it is — the change belongs in a variable file.
+    xp: 70
+    par: 3
+    solution:
+      - "echo 'motd_text: \"DB server - authorized use only\"' > group_vars/db.yml"
+      - ansible-playbook motd.yml
+    explain: |
+      Variable precedence did the work: role **defaults** (lowest) < `group_vars/all` < `group_vars/db`
+      < `host_vars/db1` < `-e`. Keep roles generic with defaults and put environment- or group-specific
+      values in inventory variables; `ansible-inventory --host db1` shows the merged result.
+
+  - id: ansible-quiz
+    title: Ansible check
+    type: quiz
+    prompt: Idempotency, handlers and variables.
+    xp: 30
+    questions:
+      - kind: single
+        prompt: Why does `ansible.builtin.command` report "changed" on every run?
+        options:
+          - It's broken
+          - Ansible can't know what an arbitrary command did, so it assumes it changed something (use `creates:` / `changed_when:` or a real module)
+          - Commands always change files
+          - Because of `become`
+        answer: 1
+      - kind: single
+        prompt: When does a handler run?
+        options:
+          - On every run
+          - At the end of the play, once, if at least one task that notifies it reported changed
+          - Before the tasks
+          - Only with --check
+        answer: 1
+      - kind: single
+        prompt: A host shows `UNREACHABLE! ... Permission denied (publickey)`. Most likely?
+        options:
+          - Python isn't installed
+          - Wrong remote user or missing SSH key for that user
+          - The module is misspelled
+          - The playbook has a YAML error
+        answer: 1
+      - kind: single
+        prompt: Terraform vs Ansible in one sentence?
+        options:
+          - Terraform provisions infrastructure through cloud APIs (with state); Ansible configures existing machines over SSH (no state)
+          - They are the same
+          - Ansible only works on AWS
+          - Terraform configures packages inside servers
+        answer: 0
+      - kind: single
+        prompt: Which variable wins for host db1?
+        options: ["role defaults", "group_vars/all.yml", "group_vars/db.yml", "`-e` on the command line"]
+        answer: 3
+
+  - id: boss-ansible-deploy
+    title: "Boss: the deploy that never finishes"
+    type: boss
+    prompt: |
+      🔥 Release day: `ansible-playbook deploy.yml` is supposed to roll nginx out to **both** web
+      servers, but it fails every time and nobody knows why.
+
+      **Make `deploy.yml` run cleanly against `web1` and `web2` (no failed or unreachable hosts) with
+      nginx running on both.**
+    initialState:
+      cwd: /home/student/infra
+      machines:
+        - { hostname: web1, ip: 10.0.2.11 }
+        - { hostname: web2, ip: 10.0.2.12 }
+      files:
+        /home/student/infra/ansible.cfg: |
+          [defaults]
+          inventory = inventory.ini
+        /home/student/infra/inventory.ini: |
+          [web]
+          web1 ansible_host=10.0.2.11
+          web2 ansible_host=10.0.2.112
+
+          [web:vars]
+          ansible_user=ubuntu
+        /home/student/infra/deploy.yml: |
+          - name: Deploy nginx
+            hosts: web
+
+            tasks:
+              - name: Install nginx
+                ansible.builtin.apt:
+                  name: nginx
+                  update_cache: true
+
+              - name: Start nginx
+                ansible.builtin.service:
+                  name: ngnix
+                  state: started
+                  enabled: true
+    hints: []
+    validator:
+      checks:
+        - type: ansibleRun
+          playbook: deploy.yml
+          hosts: [web1, web2]
+        - type: onHost
+          host: web1
+          check: { type: serviceActive, unit: nginx }
+        - type: onHost
+          host: web2
+          check: { type: serviceActive, unit: nginx }
+    xp: 150
+    par: 6
+    solution:
+      - ansible-playbook deploy.yml || true
+      - sed -i 's/10.0.2.112/10.0.2.12/' inventory.ini
+      - "sed -i 's/hosts: web/hosts: web\\n  become: true/' deploy.yml"
+      - "sed -i 's/name: ngnix/name: nginx/' deploy.yml"
+      - ansible-playbook deploy.yml
+    explain: |
+      Three different failure classes, each with its own signature: **UNREACHABLE** (`web2`'s
+      `ansible_host` pointed at a wrong IP — a connection problem, not a task problem), **FAILED** on
+      apt with "Failed to lock apt" (the play needed `become: true`), and **FAILED** on the service
+      task ("Could not find the requested service ngnix" — a typo). Read the first error per host,
+      fix, rerun; `--limit web2` and `-vvv` help when only one host misbehaves.

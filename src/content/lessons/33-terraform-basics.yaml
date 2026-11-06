@@ -1,0 +1,455 @@
+id: terraform-basics
+title: Terraform basics
+branch: cloud-iac
+prerequisites: [aws-fundamentals]
+sources:
+  - 08-Infrastructure-as-Code/01-IaC-Concepts
+  - 08-Infrastructure-as-Code/02-Terraform
+theory: |
+  **Infrastructure as code:** describe the infrastructure you want in files, review it like code, and
+  let a tool make reality match. Terraform is **declarative** — you write the end state, it works out
+  the API calls.
+
+  ```hcl
+  provider "aws" { region = "us-east-1" }
+
+  variable "env" { type = string }
+
+  resource "aws_s3_bucket" "site" {          # type "aws_s3_bucket", name "site"
+    bucket = "shop-${var.env}"               # interpolation
+    tags   = { Env = var.env }
+  }
+
+  output "arn" { value = aws_s3_bucket.site.arn }   # reference: TYPE.NAME.ATTRIBUTE
+  ```
+
+  | Command | Does |
+  |---|---|
+  | `terraform init` | downloads providers (writes `.terraform.lock.hcl`), installs modules, sets up the backend |
+  | `terraform plan` | refreshes what exists, diffs it against the code, shows the changes |
+  | `terraform apply` | plans again and asks for `yes` (or `-auto-approve`) before acting |
+  | `terraform destroy` | removes everything in the state |
+  | `terraform fmt` / `validate` | style / static checks |
+  | `terraform output -raw NAME` | read an output |
+
+  **The plan symbols:** `+` create, `~` update in-place, `-/+` replace (destroy then create — look for
+  `# forces replacement`), `-` destroy. Read every plan before you approve it: changing an
+  instance's `ami` or a bucket's name *replaces* it.
+
+  **State** (`terraform.tfstate`) maps each resource address to the real object id. Terraform only
+  manages what is in state; editing things by hand creates **drift**, which the next plan shows under
+  "Objects have changed outside of Terraform" and then tries to undo.
+
+  **Variables** come from (lowest to highest priority): defaults, `terraform.tfvars`, `*.auto.tfvars`,
+  `-var-file`, `-var`, and `TF_VAR_name` environment variables. `validation` blocks reject bad values
+  before anything runs. **Data sources** (`data "aws_ami" "ubuntu"`) read things Terraform doesn't manage.
+missions:
+  - id: tf-first-apply
+    title: Your first apply
+    type: guided
+    prompt: |
+      `~/hello-tf/main.tf` describes one S3 bucket and an output.
+
+      **Initialize the directory, read the plan, and apply it.** Then print the bucket's ARN with
+      `terraform output`.
+    initialState:
+      aws: {}
+      cwd: /home/student/hello-tf
+      files:
+        /home/student/hello-tf/main.tf: |
+          terraform {
+            required_providers {
+              aws = {
+                source  = "hashicorp/aws"
+                version = "~> 5.0"
+              }
+            }
+          }
+
+          provider "aws" {
+            region = "us-east-1"
+          }
+
+          resource "aws_s3_bucket" "hello" {
+            bucket = "devquest-tf-hello"
+
+            tags = {
+              ManagedBy = "terraform"
+            }
+          }
+
+          output "bucket_arn" {
+            value = aws_s3_bucket.hello.arn
+          }
+    hints:
+      - text: "`terraform init` first — plan fails until the provider is installed and recorded in `.terraform.lock.hcl`."
+        cost: 5
+      - text: "`terraform plan` shows `+ resource \"aws_s3_bucket\" \"hello\"` and `Plan: 1 to add`."
+        cost: 5
+      - text: "`terraform apply` asks you to type `yes` (`echo yes | terraform apply`, or `-auto-approve`). Then `terraform output bucket_arn`."
+        cost: 5
+    validator:
+      checks:
+        - type: tfState
+          dir: /home/student/hello-tf
+          address: aws_s3_bucket.hello
+        - type: awsResource
+          kind: bucket
+          where: { name: devquest-tf-hello, tags.ManagedBy: terraform }
+        - type: commandUsed
+          command: terraform
+          argsInclude: [plan]
+        - type: outputContains
+          text: arn:aws:s3:::devquest-tf-hello
+    xp: 50
+    par: 5
+    solution:
+      - terraform init
+      - terraform plan
+      - echo yes | terraform apply
+      - terraform output bucket_arn
+    explain: |
+      `init` installed the AWS provider (and pinned its version in `.terraform.lock.hcl` — commit that
+      file). `apply` created the bucket and wrote `terraform.tfstate`: `terraform state list` shows the
+      addresses it now manages, `terraform state show aws_s3_bucket.hello` the recorded attributes.
+      Never edit the state by hand, and never commit it — it can contain secrets.
+
+  - id: tf-variables
+    title: One config, many environments
+    type: guided
+    prompt: |
+      `~/shop-tf` builds a bucket named from `var.project` and `var.env`. `env` has no default and is
+      validated.
+
+      **Deploy the `staging` environment by setting `env` in a `terraform.tfvars` file** (no `-var`
+      flags), so the next person gets the same result by just running `terraform apply`.
+    initialState:
+      aws: {}
+      cwd: /home/student/shop-tf
+      files:
+        /home/student/shop-tf/variables.tf: |
+          variable "project" {
+            type    = string
+            default = "dq-shop"
+          }
+
+          variable "env" {
+            type        = string
+            description = "Environment: dev, staging or prod"
+
+            validation {
+              condition     = contains(["dev", "staging", "prod"], var.env)
+              error_message = "env must be one of dev, staging, prod."
+            }
+          }
+        /home/student/shop-tf/main.tf: |
+          provider "aws" {
+            region = "us-east-1"
+          }
+
+          locals {
+            name = "${var.project}-${var.env}"
+          }
+
+          resource "aws_s3_bucket" "assets" {
+            bucket = local.name
+
+            tags = {
+              Project = var.project
+              Env     = var.env
+            }
+          }
+        /home/student/shop-tf/outputs.tf: |
+          output "bucket_name" {
+            value = aws_s3_bucket.assets.bucket
+          }
+      setup:
+        - terraform init
+    hints:
+      - text: "Try `terraform plan` without a value — Terraform tells you `env` is required. `-var env=stage` shows the validation rule."
+        cost: 5
+      - text: "A `terraform.tfvars` file is loaded automatically: `echo 'env = \"staging\"' > terraform.tfvars`."
+        cost: 10
+    validator:
+      checks:
+        - type: awsResource
+          kind: bucket
+          where: { name: dq-shop-staging, tags.Env: staging }
+        - type: fileContains
+          path: /home/student/shop-tf/terraform.tfvars
+          regex: env\s*=\s*"staging"
+        - type: tfState
+          dir: /home/student/shop-tf
+          output: bucket_name
+          equals: dq-shop-staging
+    xp: 60
+    par: 4
+    solution:
+      - echo 'env = "staging"' > terraform.tfvars
+      - terraform plan
+      - terraform apply -auto-approve
+    explain: |
+      `terraform.tfvars` and `*.auto.tfvars` are read automatically, so the environment is part of the
+      reviewed code instead of someone's shell history. A common layout is one directory (or one
+      `*.tfvars` file) per environment. The `validation` block caught typos like `stage` before a
+      single API call was made.
+
+  - id: tf-in-place
+    title: Read the plan before you approve
+    type: guided
+    prompt: |
+      The `app` instance in `~/app-tf` needs more memory.
+
+      **Resize it from `t3.micro` to `t3.small` with Terraform — and make sure the plan updates the
+      instance in place instead of replacing it** (the instance has local data we can't lose).
+    initialState:
+      aws: {}
+      cwd: /home/student/app-tf
+      files:
+        /home/student/app-tf/main.tf: |
+          provider "aws" {
+            region = "us-east-1"
+          }
+
+          resource "aws_instance" "app" {
+            ami           = "ami-04b70fa74e45c3917"
+            instance_type = "t3.micro"
+
+            tags = {
+              Name = "app"
+            }
+          }
+
+          output "instance_id" {
+            value = aws_instance.app.id
+          }
+      setup:
+        - terraform init
+        - terraform apply -auto-approve
+    hints:
+      - text: "Edit `instance_type` in `main.tf` (`sed -i 's/t3.micro/t3.small/' main.tf`)."
+        cost: 5
+      - text: "`terraform plan` should say `~ update in-place` and `Plan: 0 to add, 1 to change, 0 to destroy.` — anything with `-/+` would replace it."
+        cost: 5
+    validator:
+      checks:
+        - type: tfState
+          dir: /home/student/app-tf
+          address: aws_instance.app
+          attr: instance_type
+          equals: t3.small
+        - type: awsResource
+          kind: instance
+          where: { tags.Name: app }
+          count: 1
+          message: The instance should be updated in place, not replaced.
+        - type: commandUsed
+          command: terraform
+          argsInclude: [plan]
+    xp: 60
+    par: 4
+    solution:
+      - sed -i 's/t3.micro/t3.small/' main.tf
+      - terraform plan
+      - terraform apply -auto-approve
+    explain: |
+      `instance_type` can change in place (AWS stops and starts the instance). Arguments marked
+      **forces replacement** in the plan — `ami`, `subnet_id`, a bucket's name — destroy the old object
+      and create a new one with a new id. Saving the plan (`terraform plan -out tfplan`, then
+      `terraform apply tfplan`) guarantees you apply exactly what you reviewed.
+
+  - id: tf-data-outputs
+    title: Stop hard-coding AMIs
+    type: free
+    prompt: |
+      `~/web-tf` pins an old Ubuntu 22.04 AMI id in `main.tf`.
+
+      **Look the AMI up with an `aws_ami` data source instead (newest image whose name matches
+      `ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*`, owner `099720109477`), apply it,
+      and add an output `public_ip` with the instance's public IP.** No AMI ids in `main.tf`.
+    initialState:
+      aws: {}
+      cwd: /home/student/web-tf
+      files:
+        /home/student/web-tf/main.tf: |
+          provider "aws" {
+            region = "us-east-1"
+          }
+
+          resource "aws_instance" "web" {
+            ami           = "ami-0e86e20dae9224db8"
+            instance_type = "t3.micro"
+
+            tags = {
+              Name = "web"
+            }
+          }
+      setup:
+        - terraform init
+        - terraform apply -auto-approve
+    hints: []
+    validator:
+      checks:
+        - type: tfState
+          dir: /home/student/web-tf
+          address: aws_instance.web
+          attr: ami
+          equals: ami-04b70fa74e45c3917
+        - type: tfState
+          dir: /home/student/web-tf
+          output: public_ip
+        - type: not
+          check:
+            type: fileContains
+            path: /home/student/web-tf/main.tf
+            text: '"ami-0'
+          message: main.tf should not hard-code an AMI id any more.
+    xp: 80
+    par: 5
+    solution:
+      - printf 'data "aws_ami" "ubuntu" {\n  most_recent = true\n  owners      = ["099720109477"]\n\n  filter {\n    name   = "name"\n    values = ["ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"]\n  }\n}\n' > ami.tf
+      - sed -i 's/"ami-0e86e20dae9224db8"/data.aws_ami.ubuntu.id/' main.tf
+      - printf 'output "public_ip" {\n  value = aws_instance.web.public_ip\n}\n' > outputs.tf
+      - terraform plan
+      - terraform apply -auto-approve
+    explain: |
+      The data source is read during every plan, so a new Ubuntu release shows up as a planned change
+      — here a **replacement**, because `ami` forces one. That's exactly why teams pin the result in
+      production (a variable, or `lifecycle { ignore_changes = [ami] }`) and roll AMI updates out
+      deliberately.
+
+  - id: tf-quiz
+    title: Terraform check
+    type: quiz
+    prompt: Plans, state and variables.
+    xp: 30
+    questions:
+      - kind: single
+        prompt: "A plan line reads `-/+ resource \"aws_instance\" \"web\"` with `~ ami = \"a\" -> \"b\" # forces replacement`. What happens on apply?"
+        options:
+          - The AMI is swapped on the running instance
+          - The instance is destroyed and a new one (new id, new IP) is created
+          - Nothing until reboot
+          - Terraform refuses
+        answer: 1
+      - kind: single
+        prompt: Someone added a tag in the console. What does the next `terraform plan` do?
+        options:
+          - Ignores it
+          - Shows the drift and plans to remove the tag to match the code
+          - Adds the tag to your .tf files
+          - Fails with an error
+        answer: 1
+      - kind: single
+        prompt: Which value wins for `var.env`?
+        options:
+          - "`terraform.tfvars`"
+          - "The `default` in `variables.tf`"
+          - "`-var env=prod` on the command line"
+          - "Whatever is first alphabetically"
+        answer: 2
+      - kind: single
+        prompt: Why commit `.terraform.lock.hcl` but not `terraform.tfstate`?
+        options:
+          - The lock file pins provider versions for everyone; state is per-environment data that can hold secrets (keep it in a remote backend)
+          - Both should be committed
+          - Neither matters
+          - The lock file holds credentials
+        answer: 0
+      - kind: single
+        prompt: What is a data source for?
+        options:
+          - Creating resources faster
+          - Reading information about things Terraform doesn't manage (an AMI, a VPC, the account id)
+          - Storing state
+          - Defining variables
+        answer: 1
+
+  - id: boss-tf-drift
+    title: "Boss: who touched production?"
+    type: boss
+    prompt: |
+      🔥 The security scanner flags `web-sg`: **SSH is open to the whole internet.** Someone also
+      "cleaned up" tags by hand in the console. Meanwhile ticket OPS-112 (approved) says the `web`
+      instance must become a `t3.small`.
+
+      **Make Terraform in `~/prod-tf` the source of truth again:** apply the approved size change *in
+      the code*, undo every manual change, and finish with a clean `terraform plan` (no changes).
+    initialState:
+      aws: {}
+      cwd: /home/student/prod-tf
+      files:
+        /home/student/prod-tf/main.tf: |
+          provider "aws" {
+            region = "us-east-1"
+          }
+
+          resource "aws_security_group" "web" {
+            name        = "web-sg"
+            description = "web servers"
+
+            ingress {
+              description = "http"
+              from_port   = 80
+              to_port     = 80
+              protocol    = "tcp"
+              cidr_blocks = ["0.0.0.0/0"]
+            }
+
+            ingress {
+              description = "ssh from the office"
+              from_port   = 22
+              to_port     = 22
+              protocol    = "tcp"
+              cidr_blocks = ["203.0.113.10/32"]
+            }
+          }
+
+          resource "aws_instance" "web" {
+            ami                    = "ami-04b70fa74e45c3917"
+            instance_type          = "t3.micro"
+            vpc_security_group_ids = [aws_security_group.web.id]
+
+            tags = {
+              Name = "web"
+              Env  = "prod"
+            }
+          }
+      setup:
+        - terraform init
+        - terraform apply -auto-approve
+        - aws ec2 authorize-security-group-ingress --group-name web-sg --protocol tcp --port 22 --cidr 0.0.0.0/0
+        - aws ec2 delete-tags --resources i-00bfcdeda4eb6248b --tags Key=Env,Value=prod
+        - aws ec2 create-tags --resources i-00bfcdeda4eb6248b --tags Key=Env,Value=test
+    hints: []
+    validator:
+      checks:
+        - type: tfNoChanges
+          dir: /home/student/prod-tf
+        - type: tfState
+          dir: /home/student/prod-tf
+          address: aws_instance.web
+          attr: instance_type
+          equals: t3.small
+        - type: not
+          check:
+            type: awsResource
+            kind: securityGroup
+            where: { name: web-sg, openPorts: 22 }
+          message: SSH must not be open to 0.0.0.0/0.
+        - type: awsResource
+          kind: instance
+          where: { tags.Name: web, tags.Env: prod, type: t3.small }
+    xp: 150
+    par: 5
+    solution:
+      - terraform plan
+      - sed -i 's/t3.micro/t3.small/' main.tf
+      - terraform apply -auto-approve
+      - terraform plan
+    explain: |
+      `terraform plan` refreshed the real objects first and listed the drift ("Objects have changed
+      outside of Terraform"): the extra SSH rule and the changed tag. Applying the code put both back
+      and made the approved change in the same reviewed step. Lessons: give humans read-only console
+      access in production, run `terraform plan` on a schedule to catch drift early, and change
+      infrastructure only through the code path.

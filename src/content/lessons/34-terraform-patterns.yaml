@@ -1,0 +1,413 @@
+id: terraform-patterns
+title: Terraform patterns & state
+branch: iac-patterns
+prerequisites: [terraform-basics]
+sources:
+  - 08-Infrastructure-as-Code/03-Terraform-Patterns
+  - 08-Infrastructure-as-Code/02-Terraform
+theory: |
+  **Modules** are directories of `.tf` files with inputs (`variable`) and outputs (`output`). Call
+  one with `module "logs" { source = "./modules/bucket"  name = "..." }` and use its outputs as
+  `module.logs.arn`. Write a module once, review it once, reuse it per environment. `terraform init`
+  installs modules — rerun it whenever you add one.
+
+  **count vs for_each:** `count = 3` creates `res[0]`, `res[1]`, `res[2]` — remove the middle item of a
+  list and everything after it shifts and is *replaced*. `for_each = toset(["a", "b"])` (a set or a
+  map, never a plain list) keys instances by value: `res["a"]`, so removing one touches only that one.
+
+  **Remote state + locking:** local `terraform.tfstate` doesn't work for a team. A backend stores
+  state centrally and locks it during writes:
+
+  ```hcl
+  terraform {
+    backend "s3" {
+      bucket       = "acme-tfstate"
+      key          = "prod/network.tfstate"
+      region       = "us-east-1"
+      use_lockfile = true      # S3-native lock (older setups use a DynamoDB table)
+    }
+  }
+  ```
+  Turn on bucket **versioning** so a bad write can be rolled back. Changing the backend needs
+  `terraform init -migrate-state`. A crashed run can leave a stale lock: read the `ID` from the error,
+  make sure nothing is still running, then `terraform force-unlock ID`.
+
+  **State surgery:** `terraform state list | show | mv | rm`. `terraform import ADDRESS ID` adopts an
+  object that already exists (you write the resource block first). `state rm` makes Terraform
+  *forget* an object without deleting it — the next plan wants to create it again.
+missions:
+  - id: tf-module
+    title: Reuse a module
+    type: guided
+    prompt: |
+      The platform team wrote `~/platform/modules/bucket` (inputs `name` and `versioned`, outputs `arn`
+      and `name`).
+
+      **In `~/platform/main.tf`, call it as `module "logs"` to create the versioned bucket
+      `dq-platform-logs`, expose its ARN as the root output `logs_arn`, and apply.**
+    initialState:
+      aws: {}
+      cwd: /home/student/platform
+      files:
+        /home/student/platform/main.tf: |
+          provider "aws" {
+            region = "us-east-1"
+          }
+        /home/student/platform/modules/bucket/variables.tf: |
+          variable "name" {
+            type        = string
+            description = "Globally unique bucket name"
+          }
+
+          variable "versioned" {
+            type    = bool
+            default = false
+          }
+        /home/student/platform/modules/bucket/main.tf: |
+          resource "aws_s3_bucket" "this" {
+            bucket = var.name
+
+            tags = {
+              ManagedBy = "terraform"
+            }
+          }
+
+          resource "aws_s3_bucket_versioning" "this" {
+            count  = var.versioned ? 1 : 0
+            bucket = aws_s3_bucket.this.id
+
+            versioning_configuration {
+              status = "Enabled"
+            }
+          }
+        /home/student/platform/modules/bucket/outputs.tf: |
+          output "arn" {
+            value = aws_s3_bucket.this.arn
+          }
+
+          output "name" {
+            value = aws_s3_bucket.this.bucket
+          }
+    hints:
+      - text: "Append the call: `printf 'module \"logs\" {\\n  source    = \"./modules/bucket\"\\n  name      = \"dq-platform-logs\"\\n  versioned = true\\n}\\n' >> main.tf`."
+        cost: 10
+      - text: "The output is `value = module.logs.arn`. New modules need `terraform init` before `plan`."
+        cost: 10
+    validator:
+      checks:
+        - type: tfState
+          dir: /home/student/platform
+          address: module.logs.aws_s3_bucket.this
+        - type: awsResource
+          kind: bucket
+          where: { name: dq-platform-logs, versioning: Enabled }
+        - type: tfState
+          dir: /home/student/platform
+          output: logs_arn
+          equals: arn:aws:s3:::dq-platform-logs
+    xp: 70
+    par: 5
+    solution:
+      - printf '\nmodule "logs" {\n  source    = "./modules/bucket"\n  name      = "dq-platform-logs"\n  versioned = true\n}\n\noutput "logs_arn" {\n  value = module.logs.arn\n}\n' >> main.tf
+      - terraform init
+      - terraform plan
+      - terraform apply -auto-approve
+    explain: |
+      Resources inside a module get addresses like `module.logs.aws_s3_bucket.this` and
+      `module.logs.aws_s3_bucket_versioning.this[0]` (the `count` toggle). The module hides the
+      details; callers only see its variables and outputs. Version shared modules (git tags or a
+      registry) so a change to the module doesn't hit every environment at once.
+
+  - id: tf-for-each
+    title: count vs for_each
+    type: guided
+    prompt: |
+      `~/buckets-tf` should create one bucket per name in `var.buckets`, but `terraform plan` fails.
+
+      **Make it work with `for_each` and apply. Then retire `logs`: remove it from the list so that
+      *only* the `dq-logs` bucket is destroyed.**
+    initialState:
+      aws: {}
+      cwd: /home/student/buckets-tf
+      files:
+        /home/student/buckets-tf/main.tf: |
+          provider "aws" {
+            region = "us-east-1"
+          }
+
+          variable "buckets" {
+            type    = list(string)
+            default = ["assets", "logs", "backups"]
+          }
+
+          resource "aws_s3_bucket" "this" {
+            for_each = var.buckets
+            bucket   = "dq-${each.key}"
+          }
+
+          output "names" {
+            value = [for b in aws_s3_bucket.this : b.bucket]
+          }
+      setup:
+        - terraform init
+    hints:
+      - text: "Read the error: for_each needs a map or a *set* of strings. Wrap the list: `for_each = toset(var.buckets)`."
+        cost: 10
+      - text: "Then remove `\"logs\", ` from the default list and check that the plan destroys only `aws_s3_bucket.this[\"logs\"]`."
+        cost: 5
+    validator:
+      checks:
+        - type: tfState
+          dir: /home/student/buckets-tf
+          address: aws_s3_bucket.this["assets"]
+        - type: tfState
+          dir: /home/student/buckets-tf
+          address: aws_s3_bucket.this["backups"]
+        - type: awsResource
+          kind: bucket
+          where: { name: dq-logs }
+          exists: false
+        - type: awsResource
+          kind: bucket
+          where: { name: dq-assets }
+    xp: 70
+    par: 6
+    solution:
+      - terraform plan || true
+      - sed -i 's/for_each = var.buckets/for_each = toset(var.buckets)/' main.tf
+      - terraform apply -auto-approve
+      - sed -i 's/"logs", //' main.tf
+      - terraform plan
+      - terraform apply -auto-approve
+    explain: |
+      With `for_each` every instance is keyed by its value (`aws_s3_bucket.this["logs"]`), so removing
+      one name removes one bucket. With `count = length(var.buckets)` the same edit would shift
+      `backups` from index 2 to index 1 — and Terraform would rename-by-replacement: destroy
+      `dq-backups`... and recreate it. Use `count` for "N identical things" or an on/off switch
+      (`count = var.enabled ? 1 : 0`), `for_each` for things with identities.
+
+  - id: tf-remote-state
+    title: Move state to S3
+    type: guided
+    prompt: |
+      `~/team-tf` keeps its state in a local file on your laptop — nobody else can run it safely.
+
+      **Create the versioned bucket `dq-tfstate-team`, enable the backend in `backend.tf.disabled`
+      (rename it to `backend.tf`), and migrate the existing state into S3.**
+    initialState:
+      aws: {}
+      cwd: /home/student/team-tf
+      files:
+        /home/student/team-tf/main.tf: |
+          provider "aws" {
+            region = "us-east-1"
+          }
+
+          resource "aws_s3_bucket" "data" {
+            bucket = "dq-team-data"
+          }
+        /home/student/team-tf/backend.tf.disabled: |
+          terraform {
+            backend "s3" {
+              bucket       = "dq-tfstate-team"
+              key          = "team/terraform.tfstate"
+              region       = "us-east-1"
+              use_lockfile = true
+            }
+          }
+      setup:
+        - terraform init
+        - terraform apply -auto-approve
+    hints:
+      - text: "`aws s3 mb s3://dq-tfstate-team` and `aws s3api put-bucket-versioning --bucket dq-tfstate-team --versioning-configuration Status=Enabled`."
+        cost: 10
+      - text: "`mv backend.tf.disabled backend.tf`, then `terraform init -migrate-state` copies the local state into the bucket."
+        cost: 10
+    validator:
+      checks:
+        - type: awsResource
+          kind: bucket
+          where: { name: dq-tfstate-team, versioning: Enabled }
+        - type: awsResource
+          kind: object
+          where: { bucket: dq-tfstate-team, key: team/terraform.tfstate }
+        - type: tfState
+          dir: /home/student/team-tf
+          address: aws_s3_bucket.data
+    xp: 70
+    par: 6
+    solution:
+      - aws s3 mb s3://dq-tfstate-team
+      - aws s3api put-bucket-versioning --bucket dq-tfstate-team --versioning-configuration Status=Enabled
+      - mv backend.tf.disabled backend.tf
+      - terraform init -migrate-state
+      - terraform plan
+    explain: |
+      The state bucket is the one thing you create *outside* this configuration (by hand, or in a
+      small bootstrap config) — Terraform can't store its state in a bucket it hasn't created yet.
+      Versioning lets you roll back a corrupted state; `use_lockfile` makes concurrent runs wait
+      instead of corrupting it. Use one `key` per stack and environment.
+
+  - id: tf-import
+    title: Adopt a hand-made bucket
+    type: free
+    prompt: |
+      `dq-legacy-uploads` was created by hand years ago. `~/legacy-tf/main.tf` now describes it, but
+      `terraform apply` would try to *create* it.
+
+      **Bring the existing bucket under Terraform without recreating it, and end with a clean plan.**
+    initialState:
+      aws: {}
+      cwd: /home/student/legacy-tf
+      files:
+        /home/student/legacy-tf/main.tf: |
+          provider "aws" {
+            region = "us-east-1"
+          }
+
+          resource "aws_s3_bucket" "uploads" {
+            bucket = "dq-legacy-uploads"
+          }
+      setup:
+        - aws s3 mb s3://dq-legacy-uploads
+        - terraform init
+    hints: []
+    validator:
+      checks:
+        - type: tfState
+          dir: /home/student/legacy-tf
+          address: aws_s3_bucket.uploads
+        - type: tfNoChanges
+          dir: /home/student/legacy-tf
+    xp: 70
+    par: 3
+    solution:
+      - terraform import aws_s3_bucket.uploads dq-legacy-uploads
+      - terraform plan
+    explain: |
+      `import` reads the real object and records it in state under the address you name — it doesn't
+      write any code, so the plan afterwards is your check that the code matches reality. Terraform
+      1.5+ also supports `import { to = aws_s3_bucket.uploads  id = "dq-legacy-uploads" }` blocks, which
+      go through plan/apply review like any other change.
+
+  - id: tf-patterns-quiz
+    title: Patterns check
+    type: quiz
+    prompt: Modules, state and teamwork.
+    xp: 30
+    questions:
+      - kind: single
+        prompt: Why does a team need a remote backend with locking?
+        options:
+          - It makes plans faster
+          - Everyone works from the same state, and two applies can't write it at the same time
+          - It encrypts the .tf files
+          - Terraform requires it
+        answer: 1
+      - kind: single
+        prompt: "`terraform state rm aws_s3_bucket.logs` does what to the bucket?"
+        options:
+          - Deletes it
+          - Nothing — Terraform just forgets it; the next plan wants to create it
+          - Moves it to another account
+          - Empties it
+        answer: 1
+      - kind: single
+        prompt: You renamed `aws_instance.web` to `aws_instance.frontend` in code. How do you avoid a replacement?
+        options:
+          - "`terraform state mv aws_instance.web aws_instance.frontend` (or a `moved` block)"
+          - "`terraform taint`"
+          - "`terraform import` again"
+          - Nothing, it's automatic
+        answer: 0
+      - kind: single
+        prompt: A plan fails with "Error acquiring the state lock". What first?
+        options:
+          - "`terraform force-unlock` immediately"
+          - Delete the state file
+          - Check whether someone (or a CI job) is still running against that state; only force-unlock a lock you know is stale
+          - Use `-lock=false` from now on
+        answer: 2
+      - kind: single
+        prompt: What does Terragrunt mainly add on top of Terraform?
+        options:
+          - New providers
+          - DRY backend/provider config and dependencies across many stacks and environments
+          - A different language
+          - A GUI
+        answer: 1
+
+  - id: boss-tf-stuck-state
+    title: "Boss: the stuck payments stack"
+    type: boss
+    prompt: |
+      🔥 A CI runner died in the middle of `terraform apply` on `~/payments-tf` (state in S3). Since
+      then every plan fails. And during the panic someone ran a "cleanup" with `terraform state rm`.
+
+      **Get the stack healthy:** a working, clean `terraform plan`, every bucket in the code tracked in
+      state — and nothing deleted or recreated (the buckets hold receipts).
+    initialState:
+      aws: {}
+      cwd: /home/student/payments-tf
+      files:
+        /home/student/payments-tf/main.tf: |
+          terraform {
+            backend "s3" {
+              bucket       = "dq-tfstate-payments"
+              key          = "payments/terraform.tfstate"
+              region       = "us-east-1"
+              use_lockfile = true
+            }
+          }
+
+          provider "aws" {
+            region = "us-east-1"
+          }
+
+          resource "aws_s3_bucket" "receipts" {
+            bucket = "dq-pay-receipts"
+          }
+
+          resource "aws_s3_bucket" "exports" {
+            bucket = "dq-pay-exports"
+          }
+        /home/student/.cache/lock.json: '{"ID":"c0ffee12-3456-4789-abcd-ef0123456789","Operation":"OperationTypeApply","Info":"","Who":"runner@ci-7f3a","Version":"1.9.8","Created":"2026-11-06T03:12:44.118Z","Path":"dq-tfstate-payments/payments/terraform.tfstate"}'
+      setup:
+        - aws s3 mb s3://dq-tfstate-payments
+        - terraform init
+        - terraform apply -auto-approve
+        - terraform state rm aws_s3_bucket.exports
+        - aws s3 cp /home/student/.cache/lock.json s3://dq-tfstate-payments/payments/terraform.tfstate.tflock
+        - rm /home/student/.cache/lock.json
+    hints: []
+    validator:
+      checks:
+        - type: tfNoChanges
+          dir: /home/student/payments-tf
+        - type: tfState
+          dir: /home/student/payments-tf
+          address: aws_s3_bucket.exports
+        - type: awsResource
+          kind: object
+          where: { bucket: dq-tfstate-payments, key: payments/terraform.tfstate.tflock }
+          exists: false
+          message: The stale lock should be released.
+      guards:
+        - type: awsResource
+          kind: bucket
+          where: { name: dq-pay-receipts }
+          message: Never delete the receipts bucket.
+    xp: 150
+    par: 6
+    solution:
+      - terraform plan || true
+      - terraform force-unlock -force c0ffee12-3456-4789-abcd-ef0123456789
+      - terraform plan
+      - terraform import aws_s3_bucket.exports dq-pay-exports
+      - terraform plan
+    explain: |
+      Two separate problems: a **stale lock** (the dead runner never released it — the error names the
+      lock ID, who held it and when) and **missing state** for a bucket that still exists, so the plan
+      wanted to create it (and apply would fail with `BucketAlreadyOwnedByYou`). `force-unlock` only
+      after confirming the holder is really gone; `import` re-adopts the object. With versioning on the
+      state bucket you could also have restored the previous state version.

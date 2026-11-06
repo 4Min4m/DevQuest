@@ -43,7 +43,10 @@ export type BranchId =
   | 'cicd-gitlab'
   | 'deploy-strategies'
   | 'gitops'
+  | 'cloud-aws'
   | 'cloud-iac'
+  | 'iac-patterns'
+  | 'config-mgmt'
   | 'observability'
   | 'security';
 
@@ -130,6 +133,20 @@ export type Check = CheckBase &
     /** Some command's stdout (since the mission started) contained this text / regex. */
     | { type: 'outputContains'; text?: string; regex?: string }
     | { type: 'anyOf'; checks: Check[] }
+    /** Evaluate a check on another machine (state.machines key, hostname, or an EC2 instance's Name tag). */
+    | { type: 'onHost'; host: string; check: Check }
+    /** An apt package is (not) installed (wrap in onHost for servers). */
+    | { type: 'packageInstalled'; package: string; installed?: boolean }
+    /** The latest ansible-playbook run (of `playbook`): no failed/unreachable hosts; `changed: 0` = idempotent rerun. */
+    | { type: 'ansibleRun'; playbook?: string; check?: boolean; changed?: number; minChanged?: number; minRuns?: number; hosts?: string[] }
+    /** Objects in the mock AWS account matching `where` (dotted paths, tags.Name...): exists / count / min. */
+    | { type: 'awsResource'; kind: 'bucket' | 'object' | 'instance' | 'volume' | 'address' | 'securityGroup' | 'vpc' | 'subnet' | 'keyPair' | 'igw' | 'routeTable'; where?: Record<string, string | number | boolean>; count?: number; min?: number; exists?: boolean }
+    /** An EC2 instance (by Name tag) answers HTTP from the internet (route + security group + a listening service). */
+    | { type: 'awsHttp'; name: string; port?: number; path?: string; contains?: string }
+    /** Terraform state in `dir`: a resource address (and attribute), an output value, or a resource count. */
+    | { type: 'tfState'; dir: string; address?: string; attr?: string; equals?: unknown; output?: string; count?: number; exists?: boolean }
+    /** `terraform plan` in `dir` reports no changes (config and real infrastructure agree). */
+    | { type: 'tfNoChanges'; dir: string }
     | { type: 'not'; check: Check }
     // ---- Docker
     /** A running container, matched by name and/or image reference. */
@@ -302,6 +319,10 @@ export interface InitialStateSpec {
   projects?: Record<string, ProjectSpec>;
   /** Image references already in the registry (e.g. pushed by earlier CI runs). */
   registryImages?: string[];
+  /** Servers on the network for ssh / Ansible (added to /etc/hosts unless hosts: false). */
+  machines?: { hostname: string; ip: string; user?: string; sshUsers?: string[]; keyFile?: string; packages?: string[]; files?: Record<string, string>; up?: boolean; hosts?: boolean; aptUpdated?: boolean }[];
+  /** A mock AWS account; `configured` (default true) writes ~/.aws credentials for the first IAM user. */
+  aws?: { configured?: boolean; region?: string; users?: Record<string, string[]> };
   /** Install Argo CD into the cluster (namespace argocd, Application CRDs). */
   argocd?: boolean;
   /** Argo CD Applications to create once it is installed (YAML). */

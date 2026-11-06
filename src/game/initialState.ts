@@ -1,4 +1,6 @@
 import { createShell } from '../sim';
+import { createAwsState, DEFAULT_KEY } from '../sim/aws/api';
+import { createMachine } from '../sim/machines';
 import { installArgo } from '../sim/kube/argocd';
 import { forgeRepo, registryPush } from '../sim/forge';
 import { blobSha, treeFromFlat, writeBlob, writeCommit } from '../sim/git/objects';
@@ -157,6 +159,26 @@ export function buildInitialState(spec: InitialStateSpec = {}): SimState {
 
   if (spec.binaries && state.systemd) Object.assign(state.systemd.binaries, spec.binaries);
   if (spec.dns && state.net) state.net.records.push(...spec.dns);
+  if (spec.machines?.length) {
+    const hosts: string[] = [];
+    for (const m of spec.machines) {
+      const ms = createMachine({ hostname: m.hostname, ip: m.ip, user: m.user, sshUsers: m.sshUsers, keyFile: m.keyFile, packages: m.packages, files: m.files, up: m.up }, state.clock);
+      if (m.aptUpdated) ms.aptLists = true;
+      (state.machines ??= {})[m.hostname] = ms;
+      if (m.hosts !== false) hosts.push(`${m.ip}\t${m.hostname}`);
+    }
+    if (hosts.length) vfs.writeFile('/etc/hosts', vfs.readFile('/etc/hosts') + hosts.join('\n') + '\n');
+  }
+  if (spec.aws) {
+    state.aws = createAwsState({ users: spec.aws.users });
+    if (spec.aws.configured !== false) {
+      const home = state.vars.HOME;
+      const learner = new Vfs(state.fs, identityOf(state), () => state.clock);
+      learner.mkdir(`${home}/.aws`, { parents: true });
+      learner.writeFile(`${home}/.aws/credentials`, `[default]\naws_access_key_id = ${DEFAULT_KEY.id}\naws_secret_access_key = ${DEFAULT_KEY.secret}\n`);
+      learner.writeFile(`${home}/.aws/config`, `[default]\nregion = ${spec.aws.region ?? 'us-east-1'}\noutput = json\n`);
+    }
+  }
   if (spec.remotes && state.net) state.net.remotes.push(...spec.remotes);
   if (spec.perf && state.perf) {
     state.perf = { ...state.perf, ...spec.perf };

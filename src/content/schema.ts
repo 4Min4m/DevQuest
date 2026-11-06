@@ -6,7 +6,7 @@ const BRANCHES = [
   'linux-basics', 'files-permissions', 'processes', 'text-processing', 'docker-basics',
   'images-dockerfile', 'volumes-networks', 'compose', 'troubleshooting',
   'systemd', 'network-tools', 'performance',
-  'version-control', 'git-branching', 'git-remotes', 'kubernetes', 'k8s-networking', 'k8s-troubleshooting', 'k8s-storage', 'k8s-scheduling', 'k8s-traffic', 'k8s-rbac-helm', 'cicd', 'cicd-gitlab', 'deploy-strategies', 'gitops', 'cloud-iac', 'observability', 'security',
+  'version-control', 'git-branching', 'git-remotes', 'kubernetes', 'k8s-networking', 'k8s-troubleshooting', 'k8s-storage', 'k8s-scheduling', 'k8s-traffic', 'k8s-rbac-helm', 'cicd', 'cicd-gitlab', 'deploy-strategies', 'gitops', 'cloud-aws', 'cloud-iac', 'iac-patterns', 'config-mgmt', 'observability', 'security',
 ];
 
 /** Collects every problem in a lesson file, so authors see them all at once. */
@@ -165,6 +165,23 @@ function checkCheck(c: unknown, where: string, p: Problems): void {
       break;
     case 'not':
       checkCheck(c.check, `${where}.check`, p);
+      break;
+    case 'onHost':
+      needs('host');
+      checkCheck(c.check, `${where}.check`, p);
+      break;
+    case 'packageInstalled':
+      needs('package');
+      break;
+    case 'awsResource':
+      needs('kind');
+      break;
+    case 'awsHttp':
+      needs('name');
+      break;
+    case 'tfState':
+    case 'tfNoChanges':
+      needs('dir');
       break;
   }
   for (const key of ['regex', 'pattern'] as const) {

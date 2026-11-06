@@ -1,0 +1,359 @@
+id: aws-fundamentals
+title: AWS fundamentals
+branch: cloud-aws
+prerequisites: [network-tools]
+sources:
+  - 07-Cloud/01-Cloud-Fundamentals
+  - 07-Cloud/02-AWS-Core
+  - 07-Cloud/04-Cloud-Networking
+  - 07-Cloud/05-Cost-Optimization
+theory: |
+  The cloud is someone else's data centre behind an **API**. Every console click is an API call, and
+  the `aws` CLI makes the same calls from your terminal (this account is simulated — nothing here costs
+  money).
+
+  **Credentials:** an IAM user's *access key id* + *secret*, kept in `~/.aws/credentials` (or the
+  `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` env vars). `aws configure set region us-east-1` picks
+  the region. `aws sts get-caller-identity` answers "who am I?".
+
+  | Service | What it is |
+  |---|---|
+  | **IAM** | users, roles and policies: who may call which API (`s3:PutObject`, `ec2:RunInstances`) |
+  | **S3** | object storage: buckets (globally unique names) hold objects (keys) |
+  | **EC2** | virtual machines (*instances*) from an *AMI*, sized by *instance type* (`t3.micro`) |
+  | **VPC** | your private network: *subnets* in availability zones, *route tables*, an *internet gateway* |
+  | **Security group** | a stateful firewall on the instance: inbound rules by port + source CIDR |
+
+  **Reaching an instance from the internet** needs *all* of: a public IP, a route `0.0.0.0/0 → igw-…`
+  in the subnet's route table (with the gateway attached to the VPC), a security-group rule for the
+  port, and something listening. A missing piece shows up as a **timeout**, not a refusal.
+
+  **Useful CLI habits:** `--query` (JMESPath) and `--output text` turn JSON into what you need:
+  `aws ec2 describe-instances --query 'Reservations[].Instances[].[InstanceId,State.Name]' --output text`.
+  `--filters Name=tag:Name,Values=web` narrows results.
+
+  **Cost hygiene:** stopped instances still pay for their disks; unattached EBS volumes and unused
+  Elastic IPs bill every hour; tag everything (`Name`, `Owner`, `Env`) so you know what to delete.
+missions:
+  - id: aws-whoami
+    title: Who am I in this account?
+    type: guided
+    prompt: |
+      Your new access key arrived as `~/Downloads/student_accessKeys.csv`.
+
+      **Configure the AWS CLI with it (region `us-east-1`) and confirm who you are with
+      `aws sts get-caller-identity`.**
+    initialState:
+      aws: { configured: false }
+      files:
+        /home/student/Downloads/student_accessKeys.csv: |
+          Access key ID,Secret access key
+          AKIAIOSFODNN7EXAMPLE,wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+    hints:
+      - text: "`cat ~/Downloads/student_accessKeys.csv` shows the key id and the secret."
+        cost: 5
+      - text: "`aws configure set aws_access_key_id AKIA...`, then `aws_secret_access_key` and `region` the same way."
+        cost: 10
+    validator:
+      checks:
+        - type: fileContains
+          path: /home/student/.aws/credentials
+          text: AKIAIOSFODNN7EXAMPLE
+        - type: fileContains
+          path: /home/student/.aws/config
+          text: us-east-1
+        - type: outputContains
+          text: arn:aws:iam::123456789012:user/student
+    xp: 40
+    par: 5
+    solution:
+      - cat ~/Downloads/student_accessKeys.csv
+      - aws configure set aws_access_key_id AKIAIOSFODNN7EXAMPLE
+      - aws configure set aws_secret_access_key wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+      - aws configure set region us-east-1
+      - aws sts get-caller-identity
+    explain: |
+      `aws configure` writes two files: secrets go to `~/.aws/credentials`, settings like the region to
+      `~/.aws/config`. Profiles (`[prod]`, `--profile prod`) keep several accounts apart. On servers and
+      in CI prefer **roles** (temporary credentials) over long-lived keys — and never commit a key.
+
+  - id: s3-website
+    title: A static website on S3
+    type: guided
+    prompt: |
+      Marketing wants `~/site` online today, as cheaply as possible.
+
+      **Host it as an S3 static website in the bucket `devquest-site-4821`:** create the bucket, upload
+      the files, enable website hosting (index `index.html`, error page `error.html`) and make the
+      objects publicly readable with `~/policy.json`. Then open
+      `http://devquest-site-4821.s3-website-us-east-1.amazonaws.com` with curl.
+    initialState:
+      aws: {}
+      files:
+        /home/student/site/index.html: |
+          <h1>Hello from S3</h1>
+        /home/student/site/error.html: |
+          <h1>Page not found</h1>
+        /home/student/policy.json: |
+          {
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Sid": "PublicRead",
+              "Effect": "Allow",
+              "Principal": "*",
+              "Action": "s3:GetObject",
+              "Resource": "arn:aws:s3:::devquest-site-4821/*"
+            }]
+          }
+    hints:
+      - text: "`aws s3 mb s3://devquest-site-4821`, then `aws s3 sync ~/site s3://devquest-site-4821`."
+        cost: 5
+      - text: "`aws s3 website s3://devquest-site-4821 --index-document index.html --error-document error.html`."
+        cost: 5
+      - text: "New buckets block public policies. `aws s3api delete-public-access-block --bucket devquest-site-4821` first, then `aws s3api put-bucket-policy --bucket devquest-site-4821 --policy file://policy.json`."
+        cost: 15
+    validator:
+      checks:
+        - type: awsResource
+          kind: bucket
+          where: { name: devquest-site-4821, website: true, public: true }
+        - type: httpResponds
+          url: http://devquest-site-4821.s3-website-us-east-1.amazonaws.com
+          contains: Hello from S3
+    xp: 60
+    par: 7
+    solution:
+      - aws s3 mb s3://devquest-site-4821
+      - aws s3 sync site s3://devquest-site-4821
+      - aws s3 website s3://devquest-site-4821 --index-document index.html --error-document error.html
+      - aws s3api delete-public-access-block --bucket devquest-site-4821
+      - aws s3api put-bucket-policy --bucket devquest-site-4821 --policy file://policy.json
+      - curl -s http://devquest-site-4821.s3-website-us-east-1.amazonaws.com
+    explain: |
+      Three separate switches had to line up: **website hosting** (index/error documents), **Block
+      Public Access** turned off for this bucket, and a **bucket policy** allowing `s3:GetObject` to
+      `"Principal": "*"`. Block Public Access is on by default because most leaked data comes from
+      accidentally public buckets — only turn it off for buckets meant to be public. In production
+      you'd usually put CloudFront in front and keep the bucket private.
+
+  - id: ec2-web-server
+    title: Launch a web server
+    type: guided
+    prompt: |
+      **Launch an Ubuntu 24.04 instance (`ami-04b70fa74e45c3917`, `t3.micro`) named `web` that serves
+      the page from `~/user-data.sh` on port 80 to everyone, while SSH (22) is open only to your own IP.**
+
+      Create a key pair `web-key` (save it as `~/web-key.pem`) and a security group `web-sg` for it.
+    initialState:
+      aws: {}
+      files:
+        /home/student/user-data.sh: |
+          #!/bin/bash
+          apt-get update
+          apt-get install -y nginx
+          echo "<h1>DevQuest web</h1>" > /var/www/html/index.html
+    hints:
+      - text: "`aws ec2 create-key-pair --key-name web-key --query KeyMaterial --output text > web-key.pem` and `chmod 400 web-key.pem`."
+        cost: 5
+      - text: "`aws ec2 create-security-group --group-name web-sg --description \"web server\"`, then `aws ec2 authorize-security-group-ingress --group-name web-sg --protocol tcp --port 80 --cidr 0.0.0.0/0`."
+        cost: 10
+      - text: "Your public IP: `curl -s ifconfig.me`. Allow SSH from it only: `--port 22 --cidr <ip>/32`."
+        cost: 5
+      - text: "`aws ec2 run-instances --image-id ami-04b70fa74e45c3917 --instance-type t3.micro --key-name web-key --security-groups web-sg --user-data file://user-data.sh --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=web}]'`"
+        cost: 15
+    validator:
+      checks:
+        - type: awsHttp
+          name: web
+          contains: DevQuest web
+        - type: awsResource
+          kind: instance
+          where: { tags.Name: web, keyName: web-key }
+        - type: not
+          check:
+            type: awsResource
+            kind: securityGroup
+            where: { name: web-sg, openPorts: 22 }
+          message: SSH (22) must not be open to 0.0.0.0/0 — allow only your IP (/32).
+        - type: awsResource
+          kind: securityGroup
+          where: { name: web-sg, openPorts: 80 }
+    xp: 80
+    par: 8
+    solution:
+      - aws ec2 create-key-pair --key-name web-key --query KeyMaterial --output text > web-key.pem
+      - chmod 400 web-key.pem
+      - aws ec2 create-security-group --group-name web-sg --description "web server"
+      - aws ec2 authorize-security-group-ingress --group-name web-sg --protocol tcp --port 80 --cidr 0.0.0.0/0
+      - curl -s ifconfig.me
+      - aws ec2 authorize-security-group-ingress --group-name web-sg --protocol tcp --port 22 --cidr 203.0.113.10/32
+      - "aws ec2 run-instances --image-id ami-04b70fa74e45c3917 --instance-type t3.micro --key-name web-key --security-groups web-sg --user-data file://user-data.sh --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=web}]'"
+    explain: |
+      **User data** runs once, as root, on the first boot (cloud-init) — `aws ec2 get-console-output`
+      shows what it printed. The security group is the instance's firewall: port 80 from anywhere for
+      visitors, port 22 only from your `/32`. The default VPC already has an internet gateway and
+      public subnets, which is why this worked without building a network.
+
+  - id: aws-cost-cleanup
+    title: Stop paying for nothing
+    type: free
+    prompt: |
+      Finance flagged this account: the bill keeps growing although only **`prod-web`** serves traffic.
+
+      **Remove the waste — unattached EBS volumes, Elastic IPs not attached to anything, and the
+      long-stopped `old-jenkins` instance — without touching `prod-web`.**
+    initialState:
+      aws: {}
+      setup:
+        - "aws ec2 run-instances --image-id ami-04b70fa74e45c3917 --instance-type t3.small --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=prod-web}]'"
+        - "aws ec2 run-instances --image-id ami-04b70fa74e45c3917 --instance-type m5.large --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=old-jenkins}]'"
+        - "aws ec2 create-volume --size 500 --availability-zone us-east-1a --tag-specifications 'ResourceType=volume,Tags=[{Key=Name,Value=db-backup-2024}]'"
+        - "aws ec2 create-volume --size 100 --availability-zone us-east-1b --tag-specifications 'ResourceType=volume,Tags=[{Key=Name,Value=scratch}]'"
+        - aws ec2 allocate-address
+        - aws ec2 allocate-address
+        - aws ec2 stop-instances --instance-ids i-0b52e5b899e262bea
+        - aws ec2 associate-address --allocation-id eipalloc-05c2a13c1b4475164 --instance-id i-0b764205761d0e205
+      setupAge: 86400
+    hints: []
+    validator:
+      checks:
+        - type: awsResource
+          kind: volume
+          where: { state: available }
+          count: 0
+          message: No EBS volume should be left unattached (state "available").
+        - type: awsResource
+          kind: address
+          where: { associated: false }
+          count: 0
+          message: Every Elastic IP left should be attached to an instance.
+        - type: not
+          check:
+            type: awsResource
+            kind: instance
+            where: { tags.Name: old-jenkins, state: stopped }
+          message: "`old-jenkins` should be terminated."
+      guards:
+        - type: awsResource
+          kind: instance
+          where: { tags.Name: prod-web, state: running }
+          message: "`prod-web` must keep running."
+        - type: awsResource
+          kind: address
+          where: { instanceId: i-0b764205761d0e205 }
+          message: Keep the Elastic IP that prod-web's customers use.
+    xp: 80
+    par: 8
+    solution:
+      - aws ec2 describe-volumes --filters Name=status,Values=available --query 'Volumes[].[VolumeId,Size,Tags[0].Value]' --output text
+      - aws ec2 delete-volume --volume-id vol-0b2f896f58c0e0ce6
+      - aws ec2 delete-volume --volume-id vol-00791547878f44f6b
+      - aws ec2 describe-addresses --query 'Addresses[?!InstanceId].AllocationId' --output text
+      - aws ec2 release-address --allocation-id eipalloc-0055b908ddc800776
+      - aws ec2 describe-instances --filters Name=instance-state-name,Values=stopped --query 'Reservations[].Instances[].[InstanceId,Tags[0].Value]' --output text
+      - aws ec2 terminate-instances --instance-ids i-0b52e5b899e262bea
+    explain: |
+      The usual suspects in every account: **available** volumes (left behind when instances are
+      terminated with `DeleteOnTermination=false`, or old backups), **unassociated Elastic IPs**
+      (charged precisely because they're idle), and **stopped instances** — compute is free while
+      stopped, but their disks are not. Filters + `--query` find them in seconds; tags tell you whose
+      they are. Automate this with a scheduled report, and enforce tags so nothing is anonymous.
+
+  - id: aws-quiz
+    title: Cloud check
+    type: quiz
+    prompt: Networking, IAM and cost basics.
+    xp: 30
+    questions:
+      - kind: single
+        prompt: An instance has a public IP and an open security group, but `curl` times out. What's the most likely missing piece?
+        options:
+          - A NAT gateway
+          - A `0.0.0.0/0` route to an attached internet gateway in the subnet's route table
+          - An Elastic IP
+          - A larger instance type
+        answer: 1
+      - kind: single
+        prompt: Security groups vs network ACLs?
+        options:
+          - Both are stateless
+          - Security groups are stateful and attach to instances (ENIs); NACLs are stateless and apply to subnets
+          - NACLs are stateful, security groups stateless
+          - Security groups apply to whole VPCs
+        answer: 1
+      - kind: single
+        prompt: Which costs money while an instance is **stopped**?
+        options: [The vCPUs, Its EBS volumes (and an idle Elastic IP), Nothing, Data transfer in]
+        answer: 1
+      - kind: single
+        prompt: A CI job needs to upload to one S3 bucket. Best credentials?
+        options:
+          - The root account's access key
+          - An admin user's key in the repo
+          - A role (or OIDC federation) allowed only `s3:PutObject` on that bucket
+          - A public bucket so no credentials are needed
+        answer: 2
+      - kind: single
+        prompt: Why spread instances over two availability zones?
+        options:
+          - Lower latency to users
+          - An AZ is a separate data centre; one failing shouldn't take the service down
+          - AWS requires it
+          - It's cheaper
+        answer: 1
+
+  - id: boss-unreachable-api
+    title: "Boss: the API nobody can reach"
+    type: boss
+    prompt: |
+      🔥 The new `api` instance is "up" according to the console — nginx is installed and running —
+      but every customer request to its public IP times out.
+
+      **Make the `api` instance answer HTTP on port 80 from the internet.** Fix the network; don't
+      replace the instance.
+    initialState:
+      aws: {}
+      files:
+        /home/student/.cache/api-init.sh: |
+          #!/bin/bash
+          apt-get update
+          apt-get install -y nginx
+          echo 'api ok' > /var/www/html/index.html
+      setup:
+        - "aws ec2 create-vpc --cidr-block 10.0.0.0/16 --tag-specifications 'ResourceType=vpc,Tags=[{Key=Name,Value=api-vpc}]'"
+        - aws ec2 create-subnet --vpc-id vpc-0b764205761d0e205 --cidr-block 10.0.1.0/24 --availability-zone us-east-1a
+        - aws ec2 modify-subnet-attribute --subnet-id subnet-0b52e5b899e262bea --map-public-ip-on-launch
+        - aws ec2 create-internet-gateway
+        - aws ec2 create-security-group --group-name api-sg --description api --vpc-id vpc-0b764205761d0e205
+        - aws ec2 authorize-security-group-ingress --group-id sg-05e5fd8729f283bf4 --protocol tcp --port 8080 --cidr 0.0.0.0/0
+        - "aws ec2 run-instances --image-id ami-04b70fa74e45c3917 --instance-type t3.micro --subnet-id subnet-0b52e5b899e262bea --security-group-ids sg-05e5fd8729f283bf4 --user-data file://.cache/api-init.sh --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=api}]'"
+        - rm .cache/api-init.sh
+    hints: []
+    validator:
+      checks:
+        - type: awsHttp
+          name: api
+          contains: api ok
+      guards:
+        - type: awsResource
+          kind: instance
+          where: { id: i-00791547878f44f6b, state: running }
+          message: Keep the existing `api` instance running — fix its network instead.
+    xp: 150
+    par: 10
+    solution:
+      - aws ec2 describe-instances --filters Name=tag:Name,Values=api --query 'Reservations[].Instances[].[InstanceId,PublicIpAddress,SubnetId,VpcId]' --output text
+      - curl -s -m 5 http://54.169.84.71 || true
+      - aws ec2 describe-route-tables --filters Name=vpc-id,Values=vpc-0b764205761d0e205
+      - aws ec2 describe-internet-gateways
+      - aws ec2 attach-internet-gateway --internet-gateway-id igw-009c71aefb242dc95 --vpc-id vpc-0b764205761d0e205
+      - aws ec2 create-route --route-table-id rtb-00bfcdeda4eb6248b --destination-cidr-block 0.0.0.0/0 --gateway-id igw-009c71aefb242dc95
+      - aws ec2 describe-security-groups --group-ids sg-05e5fd8729f283bf4
+      - aws ec2 authorize-security-group-ingress --group-id sg-05e5fd8729f283bf4 --protocol tcp --port 80 --cidr 0.0.0.0/0
+      - curl -s http://54.169.84.71
+    explain: |
+      Three independent layers had to be right, and each one fails as a silent **timeout**:
+      the **internet gateway** must be attached to the VPC, the subnet's **route table** needs
+      `0.0.0.0/0 → igw`, and the **security group** must allow the port the service listens on (80,
+      not 8080). Debug in that order — route first, then firewall, then the service (`ssh` in and
+      `curl localhost`). VPC Reachability Analyzer automates exactly this walk.
