@@ -1,3 +1,4 @@
+import { reloadHooks } from './hooks';
 import type { CommandContext, CommandDef } from '../shell/types';
 import { LoadedUnit, Systemd } from './manager';
 import type { JournalEntry } from './types';
@@ -198,6 +199,8 @@ export const systemctl: CommandDef = {
           return 1;
         }
         sd.log('systemd', 1, name, `Reloading ${name} - ${u.config.description}...`);
+        const exe = u.config.execStart.split(/\s+/)[0];
+        for (const h of reloadHooks) for (const l of h(ctx.state, name, exe) ?? []) sd.log(exe.split('/').pop()!, u.runtime.mainPid ?? 1, name, l.msg, l.prio);
         sd.log('systemd', 1, name, `Reloaded ${name} - ${u.config.description}.`);
         return 0;
       }

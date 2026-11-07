@@ -139,5 +139,5 @@ registerHttpProvider((state, req): HttpResult | undefined => {
   const r = reach(state, m, ip, req.port);
   if (r === 'timeout') return { kind: 'error', code: 28, message: `Failed to connect to ${req.host} port ${req.port} after 130000 ms: Couldn't connect to server` };
   if (r === 'refused') return { kind: 'error', code: 7, message: `Failed to connect to ${req.host} port ${req.port} after 1 ms: Couldn't connect to server` };
-  return answerOnMachine(m, req.port, req.path) ?? { kind: 'error', code: 52, message: 'Empty reply from server' };
+  return answerOnMachine(m, req.port, req.path, req) ?? { kind: 'error', code: 52, message: 'Empty reply from server' };
 }, 5);

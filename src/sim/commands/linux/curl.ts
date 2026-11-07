@@ -37,9 +37,14 @@ export const curl: CommandDef = {
     let timeout: number | undefined;
     let outFile: string | undefined;
     const urls: string[] = [];
+    let method: string | undefined;
+    let body: string | undefined;
+    let getData = false;
+    let insecure = false;
+    let cacert: string | undefined;
     const reqHeaders: Record<string, string> = {};
     // Expand combined boolean short flags: -sSfL → -s -S -f -L
-    const args = ctx.args.flatMap((a) => (/^-[sSiIfLvk]{2,}$/.test(a) ? [...a.slice(1)].map((c) => '-' + c) : [a]));
+    const args = ctx.args.flatMap((a) => (/^-[sSiIfLvkG]{2,}$/.test(a) ? [...a.slice(1)].map((c) => '-' + c) : [a]));
     for (let i = 0; i < args.length; i++) {
       const a = args[i];
       if (a === '--help' || a === '-h') {
@@ -60,14 +65,21 @@ export const curl: CommandDef = {
           return 2;
         }
         timeout = timeout === undefined ? n : Math.min(timeout, n);
-      } else if (a === '-L' || a === '--location' || a === '-k' || a === '--insecure') {
+      } else if (a === '-L' || a === '--location') {
         /* accepted; no visible effect in the simulator */
       } else if (a === '-o' || a === '--output') outFile = args[++i];
       else if (a === '-H' || a === '--header') {
         const h = args[++i] ?? '';
         const colon = h.indexOf(':');
         if (colon > 0) reqHeaders[h.slice(0, colon).trim().toLowerCase()] = h.slice(colon + 1).trim();
-      } else if (a === '-X' || a === '--request' || a === '-d' || a === '--data') i++;
+      } else if (a === '-X' || a === '--request') method = (args[++i] ?? 'GET').toUpperCase();
+      else if (a === '-d' || a === '--data' || a === '--data-raw' || a === '--data-urlencode') {
+        const d = args[++i] ?? '';
+        const enc = a === '--data-urlencode' ? d.replace(/^([^=]*=)?(.*)$/s, (_m, k: string | undefined, v: string) => (k ?? '') + encodeURIComponent(v)) : d;
+        body = body === undefined ? enc : body + '&' + enc;
+      } else if (a === '-G' || a === '--get') getData = true;
+      else if (a === '-k' || a === '--insecure') insecure = true;
+      else if (a === '--cacert') cacert = args[++i];
       else if (a.startsWith('-')) {
         ctx.err(`curl: option ${a}: is unknown (or not supported in devquest)\ncurl: try 'curl --help' for more information\n`);
         return 2;
@@ -80,7 +92,20 @@ export const curl: CommandDef = {
     const quietErrors = silent && !showErrors;
     let code = 0;
     for (const raw of urls) {
-      const url = parseUrl(raw);
+      const url = parseUrl(getData && body !== undefined ? raw + (raw.includes('?') ? '&' : '?') + body : raw, method ?? (body !== undefined && !getData ? 'POST' : 'GET'));
+      if (url) {
+        if (body !== undefined && !getData) (url as typeof url & { body?: string }).body = body;
+        if (insecure) url.insecure = true;
+        if (cacert) {
+          try {
+            url.cacert = ctx.vfs.readFile(ctx.resolve(cacert));
+          } catch {
+            if (!quietErrors) ctx.err(`curl: (77) error setting certificate file: ${cacert}\n`);
+            code = 77;
+            continue;
+          }
+        }
+      }
       if (!url) {
         if (!quietErrors) ctx.err(`curl: (3) URL rejected: Malformed input to a URL function\n`);
         code = 3;

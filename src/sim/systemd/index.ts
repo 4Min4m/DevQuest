@@ -1,5 +1,6 @@
 import { LOCAL_HOSTS, registerHttpProvider } from '../net';
-import type { HttpResult } from '../net';
+import type { HttpResult, Request } from '../net';
+import { appHandlers } from './hooks';
 import type { SimState } from '../state';
 import { joinPath, normalize } from '../vfs/path';
 import { Vfs } from '../vfs/vfs';
@@ -10,7 +11,7 @@ export { Systemd } from './manager';
 export type * from './types';
 
 /** Answer an HTTP request to `port` on machine `state` from whatever process listens there. */
-export function answerOnMachine(state: SimState, port: number, path: string): HttpResult | undefined {
+export function answerOnMachine(state: SimState, port: number, path: string, req?: Request & { body?: string }): HttpResult | undefined {
   const proc = state.processes.find((p) => p.ports?.includes(port));
   if (!proc) return undefined;
   const exe = proc.command.split(/\s+/)[0];
@@ -18,6 +19,7 @@ export function answerOnMachine(state: SimState, port: number, path: string): Ht
   if (exe.endsWith('sshd') || proc.command.startsWith('sshd')) {
     return { kind: 'error', code: 1, message: 'Received HTTP/0.9 when not allowed' };
   }
+  if (spec?.app && appHandlers[spec.app]) return appHandlers[spec.app](state, req ?? { key: `http://localhost:${port}${path}`, host: 'localhost', port, path, method: 'GET' });
   if (spec?.staticRoot) {
     const vfs = new Vfs(state.fs, { name: 'root', groups: ['root'] });
     const clean = normalize(joinPath(spec.staticRoot, path.split('?')[0]));
@@ -48,7 +50,7 @@ registerHttpProvider((state, req) => {
     return !!ip && isLocalIp(state, ip);
   })();
   if (!local) return undefined;
-  return answerOnMachine(state, req.port, req.path);
+  return answerOnMachine(state, req.port, req.path, req);
 });
 
 export const systemdCommands = [systemctl, journalctl];

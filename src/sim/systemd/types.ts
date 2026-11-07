@@ -56,6 +56,8 @@ export interface BinarySpec {
   startLog?: string[];
   /** HTTP responses by path (default "/") when it listens. */
   http?: Record<string, { status?: number; body: string }>;
+  /** A program with its own HTTP behaviour (see systemd/hooks.ts appHandlers). */
+  app?: string;
   /** Serve files from this directory (nginx / apache style), index.html first. */
   staticRoot?: string;
   /** Value of the `Server:` header and the error pages' signature (e.g. "nginx/1.24.0 (Ubuntu)"). */

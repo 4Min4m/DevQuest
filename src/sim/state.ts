@@ -64,6 +64,8 @@ export interface SimState {
   packages?: Record<string, string>;
   /** False until `apt update` has fetched package lists (fresh cloud images); undefined = fetched. */
   aptLists?: boolean;
+  /** Observability: metric/log models, Prometheus rules and Alertmanager silences. */
+  obs?: import('./obs/types').ObsState;
   /** The mock AWS account (aws CLI, Terraform's aws provider). */
   aws?: import('./aws/types').AwsState;
   /** Ansible runs from this workstation (newest last), for validators. */

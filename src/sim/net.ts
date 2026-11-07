@@ -14,6 +14,11 @@ export interface Request {
   method: string;
   /** Request headers set with `curl -H`, lower-cased names (e.g. host). */
   headers?: Record<string, string>;
+  /** curl -k: don't verify TLS certificates. */
+  insecure?: boolean;
+  /** curl --cacert: extra trusted CA (PEM). */
+  cacert?: string;
+  body?: string;
 }
 
 export type HttpResult = { kind: 'response'; res: HttpResponse } | { kind: 'error'; code: number; message: string };
