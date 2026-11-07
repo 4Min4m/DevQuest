@@ -29,6 +29,21 @@ export function machineShell(m: SimState): ShellLike {
   return factory(m);
 }
 
+export const SSHD_CONFIG = `# See sshd_config(5) for details.
+Include /etc/ssh/sshd_config.d/*.conf
+
+#Port 22
+#PermitRootLogin prohibit-password
+#PubkeyAuthentication yes
+#PasswordAuthentication yes
+KbdInteractiveAuthentication no
+UsePAM yes
+X11Forwarding yes
+PrintMotd no
+AcceptEnv LANG LC_*
+Subsystem sftp /usr/lib/openssh/sftp-server
+`;
+
 export interface MachineSpec {
   hostname: string;
   ip: string;
@@ -90,6 +105,11 @@ export function createMachine(spec: MachineSpec, clock?: number): SimState {
     vfs.chown(home, user, user);
   }
   vfs.writeFile('/etc/hostname', spec.hostname + '\n');
+  vfs.mkdir('/etc/ssh', { parents: true });
+  vfs.writeFile('/etc/ssh/sshd_config', SSHD_CONFIG);
+  m.sshdLoaded = SSHD_CONFIG;
+  vfs.mkdir('/lib/systemd/system', { parents: true });
+  vfs.writeFile('/lib/systemd/system/ssh.service', '[Unit]\nDescription=OpenBSD Secure Shell server\nAfter=network.target\n\n[Service]\nExecStartPre=/usr/sbin/sshd -t\nExecStart=/usr/sbin/sshd -D\nExecReload=/bin/kill -HUP $MAINPID\nRestart=on-failure\n\n[Install]\nWantedBy=multi-user.target\n');
   for (const [p, c] of Object.entries(spec.files ?? {})) {
     vfs.mkdir(p.replace(/\/[^/]*$/, '') || '/', { parents: true });
     vfs.writeFile(p, c);

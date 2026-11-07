@@ -7,3 +7,6 @@ export const reloadHooks: ((state: SimState, unit: string, exe: string) => { msg
 
 /** HTTP handlers for BinarySpec.app programs. */
 export const appHandlers: Record<string, (state: SimState, req: Request & { body?: string }) => HttpResult> = {};
+
+/** A unit started successfully: (state, unit). */
+export const startHooks: ((state: SimState, unit: string) => void)[] = [];

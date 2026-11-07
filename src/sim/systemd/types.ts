@@ -56,6 +56,8 @@ export interface BinarySpec {
   startLog?: string[];
   /** HTTP responses by path (default "/") when it listens. */
   http?: Record<string, { status?: number; body: string }>;
+  /** Serve HTTPS with this certificate / key (read at start; a restart picks up new files). */
+  tls?: { cert: string; key: string };
   /** A program with its own HTTP behaviour (see systemd/hooks.ts appHandlers). */
   app?: string;
   /** Serve files from this directory (nginx / apache style), index.html first. */

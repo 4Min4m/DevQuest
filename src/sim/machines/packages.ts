@@ -109,6 +109,8 @@ export const BASE_PACKAGES: Record<string, string> = {
   coreutils: '9.4-3ubuntu6',
   curl: '8.5.0-2ubuntu10.4',
   'openssh-server': '1:9.6p1-3ubuntu13.5',
+  openssl: '3.0.13-0ubuntu3.4',
+  ufw: '0.36.2-6',
   python3: '3.12.3-0ubuntu2',
   sudo: '1.9.15p5-3ubuntu5',
   systemd: '255.4-1ubuntu8.4',

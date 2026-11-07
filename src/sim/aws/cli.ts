@@ -866,6 +866,35 @@ function iam(x: Ctx): unknown {
     case 'get-user':
       api.authorize(c, 'iam:GetUser', T);
       return { User: shape(userOf(one(x, 'user-name') ?? c.user)) };
+    case 'list-access-keys': {
+      api.authorize(c, 'iam:ListAccessKeys', T);
+      const u = userOf(one(x, 'user-name') ?? c.user);
+      return { AccessKeyMetadata: Object.entries(c.aws.keys).filter(([, k]) => k.user === u.name).map(([id, k]) => ({ UserName: u.name, AccessKeyId: id, Status: k.status ?? 'Active', CreateDate: iso(k.created ?? u.created) })) };
+    }
+    case 'create-access-key': {
+      api.authorize(c, 'iam:CreateAccessKey', T);
+      const u = userOf(one(x, 'user-name') ?? c.user);
+      const mine = Object.values(c.aws.keys).filter((k) => k.user === u.name);
+      if (mine.length >= 2) throw new AwsError('LimitExceeded', 'Cannot exceed quota for AccessKeysPerUser: 2', T);
+      const id = 'AKIA' + api.newId(c.aws, 'k', 17).slice(3).toUpperCase().replace(/[^A-Z2-7]/g, (ch) => 'ABCDEFGHJKLMNPQR'[parseInt(ch, 16) % 16]).slice(0, 16);
+      const secret = api.newId(c.aws, 's', 41).slice(2) + 'Qx';
+      c.aws.keys[id] = { secret: secret.slice(0, 40), user: u.name, status: 'Active', created: c.state.clock };
+      return { AccessKey: { UserName: u.name, AccessKeyId: id, Status: 'Active', SecretAccessKey: secret.slice(0, 40), CreateDate: iso(c.state.clock) } };
+    }
+    case 'update-access-key':
+    case 'delete-access-key': {
+      api.authorize(c, `iam:${T}`, T);
+      const id = need(x, 'access-key-id');
+      const k = c.aws.keys[id];
+      if (!k) throw new AwsError('NoSuchEntity', `The Access Key with id ${id} cannot be found.`, T);
+      if (x.op === 'delete-access-key') delete c.aws.keys[id];
+      else {
+        const st = need(x, 'status');
+        if (st !== 'Active' && st !== 'Inactive') throw new CliError(`\naws: error: argument --status: Invalid choice, valid choices are:\n\nActive                                   | Inactive\n`, 252);
+        k.status = st;
+      }
+      return undefined;
+    }
     case 'list-attached-user-policies':
       api.authorize(c, 'iam:ListAttachedUserPolicies', T);
       return { AttachedPolicies: userOf(need(x, 'user-name')).policies.map((p) => ({ PolicyName: p, PolicyArn: `arn:aws:iam::aws:policy/${p}` })) };
@@ -950,6 +979,11 @@ export function callerFor(ctx: CommandContext, g: Globals, svc: string, opName: 
   if (!api.REGIONS.includes(region)) throw new CliError(`\nCould not connect to the endpoint URL: "https://${svc === 's3api' ? 's3' : svc}.${region}.amazonaws.com/"\n`, 255);
   const key = st.aws.keys[r.keyId];
   if (!key) {
+    if (svc === 'ec2') throw new AwsError('AuthFailure', 'AWS was not able to validate the provided access credentials', opName);
+    if (svc.startsWith('s3')) throw new AwsError('InvalidAccessKeyId', 'The AWS Access Key Id you provided does not exist in our records.', opName);
+    throw new AwsError('InvalidClientTokenId', 'The security token included in the request is invalid.', opName);
+  }
+  if (key.status === 'Inactive') {
     if (svc === 'ec2') throw new AwsError('AuthFailure', 'AWS was not able to validate the provided access credentials', opName);
     if (svc.startsWith('s3')) throw new AwsError('InvalidAccessKeyId', 'The AWS Access Key Id you provided does not exist in our records.', opName);
     throw new AwsError('InvalidClientTokenId', 'The security token included in the request is invalid.', opName);

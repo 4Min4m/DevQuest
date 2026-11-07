@@ -126,6 +126,8 @@ export interface Process {
   files?: string[];
   /** systemd unit that started it. */
   unit?: string;
+  /** Certificate (PEM) a TLS server loaded at start. */
+  tls?: string;
 }
 
 export interface PerfState {

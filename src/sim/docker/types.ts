@@ -33,6 +33,8 @@ export interface Image {
   digest: string;
   /** Commands missing from this image (see catalog). */
   lacks: string[];
+  /** Built images: the FROM reference (repo:tag) they started from (vulnerability scanning). */
+  base?: string;
 }
 
 export type ContainerStatus = 'created' | 'running' | 'paused' | 'restarting' | 'exited';

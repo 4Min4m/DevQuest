@@ -3,6 +3,7 @@ import type { CommandContext, CommandDef } from '../shell/types';
 import type { SimState } from '../state';
 import { resolveHost } from '../netsim/resolve';
 import { findMachine, machineShell, reach } from './index';
+import { sshdEffective } from '../security/hardening';
 
 function quote(a: string): string {
   return /^[\w@%+=:,./-]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`;
@@ -71,6 +72,9 @@ export function sshConnect(state: SimState, dest: string, opts: { identity?: str
     const content = (st as { content?: string }).content ?? '';
     if (opts.identity.split('/').pop() !== key && !content.includes(key.replace(/-/g, ''))) return denied();
   }
+  const eff = sshdEffective(m);
+  if (user === 'root' && eff.permitrootlogin === 'no') return denied();
+  if (eff.allowusers && !eff.allowusers.split(/\s+/).includes(user)) return denied();
   if (!m.machine!.sshUsers.includes(user) || !m.users.some((u) => u.name === user)) return denied();
   return { m, user };
 }

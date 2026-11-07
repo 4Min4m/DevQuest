@@ -1,6 +1,7 @@
 import { LOCAL_HOSTS, registerHttpProvider } from '../net';
 import type { HttpResult, Request } from '../net';
 import { appHandlers } from './hooks';
+import { curlTlsMessage, verifyCert } from '../security/tls';
 import type { SimState } from '../state';
 import { joinPath, normalize } from '../vfs/path';
 import { Vfs } from '../vfs/vfs';
@@ -19,6 +20,14 @@ export function answerOnMachine(state: SimState, port: number, path: string, req
   if (exe.endsWith('sshd') || proc.command.startsWith('sshd')) {
     return { kind: 'error', code: 1, message: 'Received HTTP/0.9 when not allowed' };
   }
+  const https = !!req?.key.startsWith('https:');
+  if (proc.tls) {
+    if (!https) return { kind: 'response', res: { status: 400, body: 'Client sent an HTTP request to an HTTPS server.\n', headers: { 'Content-Type': 'text/plain; charset=utf-8' } } };
+    if (!req?.insecure) {
+      const err = verifyCert(state, proc.tls, req!.host, req!.cacert);
+      if (err) return { kind: 'error', code: err.code, message: curlTlsMessage(err, req!.host) };
+    }
+  } else if (https) return { kind: 'error', code: 35, message: 'OpenSSL/3.0.13: error:0A00010B:SSL routines::wrong version number' };
   if (spec?.app && appHandlers[spec.app]) return appHandlers[spec.app](state, req ?? { key: `http://localhost:${port}${path}`, host: 'localhost', port, path, method: 'GET' });
   if (spec?.staticRoot) {
     const vfs = new Vfs(state.fs, { name: 'root', groups: ['root'] });

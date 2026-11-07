@@ -5,6 +5,9 @@ import type { Process, SimState } from '../state';
 import { Vfs } from '../vfs/vfs';
 import type { BinarySpec, JournalEntry, SystemdState, UnitRuntime } from './types';
 import { parseUnit, UnitConfig } from './unitfile';
+import { unpem } from '../security/tls';
+import { startHooks } from './hooks';
+import type { Cert } from '../security/tls';
 
 export const UNIT_DIRS = ['/etc/systemd/system', '/lib/systemd/system'];
 const ROOT = { name: 'root', groups: ['root'] };
@@ -177,6 +180,18 @@ export class Systemd {
     for (const f of spec.requireFiles ?? []) {
       if (this.read(f) === null) return fail(1, `Error: open ${f}: no such file or directory`);
     }
+    let tlsCert: string | undefined;
+    if (spec.tls) {
+      const cert = this.read(spec.tls.cert);
+      const key = this.read(spec.tls.key);
+      if (cert === null) return fail(1, `Error: open ${spec.tls.cert}: no such file or directory`);
+      if (key === null) return fail(1, `Error: open ${spec.tls.key}: no such file or directory`);
+      const c = unpem<Cert>('cert', cert)[0];
+      const k = unpem<{ keyId: string }>('key', key)[0];
+      if (!c) return fail(1, `Error: tls: failed to find any PEM data in certificate input`);
+      if (!k || k.keyId !== c.keyId) return fail(1, `Error: tls: private key does not match public key`);
+      tlsCert = cert;
+    }
     for (const k of spec.requireEnv ?? []) {
       if (!env[k]) return fail(1, `Error: environment variable ${k} is required but not set`);
     }
@@ -219,6 +234,7 @@ export class Systemd {
       ports: port ? [port] : undefined,
       unit: u.name,
       files: cfg.workingDirectory ? [cfg.workingDirectory] : undefined,
+      ...(tlsCert ? { tls: tlsCert } : {}),
     };
     this.state.processes.push(proc);
     for (const l of spec.startLog ?? []) lines.push({ ident, msg: l.replace('{port}', String(port)), prio: 6 });
@@ -245,6 +261,7 @@ export class Systemd {
       if (r.status === undefined) {
         rt.active = 'active';
         rt.sub = 'running';
+        for (const h of startHooks) h(this.state, name);
         rt.mainPid = r.pid;
         rt.since = this.state.clock;
         rt.result = 'success';

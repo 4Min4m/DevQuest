@@ -65,7 +65,7 @@ export interface IamUser { name: string; id: string; arn: string; created: numbe
 export interface AwsState {
   account: string;
   /** Access keys the account knows: key id → secret and user. */
-  keys: Record<string, { secret: string; user: string }>;
+  keys: Record<string, { secret: string; user: string; status?: 'Active' | 'Inactive'; created?: number }>;
   users: Record<string, IamUser>;
   buckets: Record<string, Bucket>;
   vpcs: Vpc[];

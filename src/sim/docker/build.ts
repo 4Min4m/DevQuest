@@ -384,7 +384,7 @@ export function buildImage(ctx: BuildContext, req: BuildRequest): BuildOutput {
   }
   let image = images.find((i) => i.id === id && i.repository === tag.repository && i.tag === tag.tag);
   if (!image) {
-    image = { id, repository: tag.repository, tag: tag.tag, fs, created: ctx.host.clock, size, config, shells, lacks, digest: hexId('digest-' + id) };
+    image = { id, repository: tag.repository, tag: tag.tag, fs, created: ctx.host.clock, size, config, shells, lacks, digest: hexId('digest-' + id), base: base.base ?? `${baseRepo}:${baseTag}` };
     images.push(image);
   }
   return { image, progress };
