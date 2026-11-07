@@ -30,6 +30,9 @@ export const BADGES: BadgeDef[] = [
   { id: 'container-captain', title: 'Container captain', description: 'Complete Docker Basics', icon: '🐳', earned: lessonDone('docker-basics') },
   { id: 'image-smith', title: 'Image smith', description: 'Complete Images & Dockerfile', icon: '📦', earned: lessonDone('images-dockerfile') },
   { id: 'conductor', title: 'Conductor', description: 'Complete Docker Compose', icon: '🧩', earned: lessonDone('compose') },
+  { id: 'infra-coder', title: 'Infrastructure coder', description: 'Complete Terraform basics', icon: '🧱', earned: lessonDone('terraform-basics') },
+  { id: 'hardened', title: 'Hardened', description: 'Complete DevSecOps essentials', icon: '🛡️', earned: lessonDone('security') },
+  { id: 'pager-hero', title: 'Pager hero', description: 'Complete Incident Response', icon: '🚨', earned: lessonDone('incident-response') },
   { id: 'crashloop-fixer', title: 'CrashLoop fixer', description: 'Fix your first crash-looping container', icon: '🔁', earned: (p) => 'crashloop' in p.missions },
   {
     id: 'boss-slayer',

@@ -1,7 +1,14 @@
 # DevOps Quest
 
-A free, fully client-side, gamified app for learning Linux and Docker in a simulated
-browser terminal. No backend, no runtime network calls. See [CLAUDE.md](CLAUDE.md) for the full design.
+A free, fully client-side, gamified app for learning DevOps and platform engineering in a simulated
+browser terminal — Linux, Docker, Git, Kubernetes, CI/CD and GitOps, AWS, Terraform, Ansible,
+observability, security and incident response. No backend, no runtime network calls, no cost.
+
+**New here? Read the [tutorial](docs/TUTORIAL.md)** — how to run it, the screens, how missions,
+hints, hearts and XP work, terminal tips, and how to write your own lessons.
+
+**Content:** 38 lessons (one per skill-tree branch) — 100 hands-on missions, 29 boss fights and 44
+knowledge checks — built from the knowledge vault. See [CLAUDE.md](CLAUDE.md) for the design.
 
 ## Status
 
@@ -93,6 +100,21 @@ browser terminal. No backend, no runtime network calls. See [CLAUDE.md](CLAUDE.m
   knowledge checks and 4 boss fights (an unreachable API, production drift, a stuck state, a
   failing deploy).
 
+- **Step 14 done:** Observability, security and incident response. **Metrics** are models computed on
+  demand (counters integrate rates, histograms follow a latency distribution) and can depend on the
+  live system, so a rollback or a config fix shows up in the graphs. A **PromQL** engine (selectors,
+  range vectors, rate/increase/*_over_time, histogram_quantile, aggregations, vector matching), Prometheus
+  as a service with alerting and recording rules (`for:`, templated annotations, reload), its HTTP API,
+  `promtool` (check rules/config, query instant/range), Alertmanager with `amtool` (alerts, silences),
+  and Loki with a LogQL subset via `logcli`. **Security:** simulated X.509 with `openssl`
+  (genrsa/req/x509 signing with SANs/verify/s_client/checkend), a trust store, HTTPS services and
+  certificate verification in curl; `trivy` image/fs/config scanning against an offline CVE and
+  misconfiguration database; `gitleaks` over the full git history; `ufw` firewalls enforced on the
+  network; `sshd -t/-T` with sshd applying its config on reload; AWS access-key rotation. Three lessons —
+  Metrics, logs and alerts; DevSecOps essentials; Incident response — with 11 missions, 3 knowledge
+  checks and 4 boss fights (a latency regression, an audit of privileged pods, payments down after a
+  DNS clean-up, a canary burning the error budget), plus 3 new badges and the [tutorial](docs/TUTORIAL.md).
+
 ### Roadmap (from the knowledge vault)
 
 | Step | Chapters | What gets built |
@@ -103,7 +125,7 @@ browser terminal. No backend, no runtime network calls. See [CLAUDE.md](CLAUDE.m
 | ~~11~~ | 05 Kubernetes (2) | ✅ done (see above) |
 | ~~12~~ | 06 CI/CD, GitOps | ✅ done (see above) |
 | ~~13~~ | 07 Cloud, 08 IaC | ✅ done (see above) |
-| 14 | 09 Observability, 10 Security | PromQL, logs, alerting, DevSecOps + incident boss fights |
+| ~~14~~ | 09 Observability, 10 Security, 13 SRE | ✅ done (see above) — all steps complete |
 
 ## Develop
 
@@ -150,10 +172,15 @@ src/sim/aws/                mock AWS account: api.ts (one API for CLI + Terrafor
 src/sim/terraform/          hcl.ts (parser), eval.ts + functions.ts, config.ts (modules, diagnostics),
                             engine.ts (plan), apply.ts, render.ts (plan output), providers.ts,
                             state.ts (tfstate, backends, locks), fmt.ts, cli.ts
+src/sim/obs/                metrics.ts (series models), promql.ts, prometheus.ts (rules, alerts, HTTP API,
+                            promtool, amtool), logs.ts (LogQL, logcli), install.ts (the monitoring stack)
+src/sim/security/           tls.ts (certificates, openssl, curl verification), trivy.ts + vulndb.ts,
+                            gitleaks.ts, hardening.ts (ufw, sshd)
 src/game/                   mission engine: initial-state builder, validators, MissionSession;
                             progress.ts (XP, levels, streak, hearts, unlocking, skill tree),
                             store.ts (Zustand store persisted to localStorage)
 src/content/lessons/*.yaml  lesson content (theory, missions, hints, checks, reference solutions)
+docs/TUTORIAL.md            how to use the app and write lessons
 src/ui/terminal/            line editor (history, Ctrl keys, Tab) + xterm.js pane
 src/ui/lesson/              lesson list + mission pane
 src/ui/tree/, src/ui/profile/  skill tree and profile (export / import / reset) screens
