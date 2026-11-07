@@ -6,7 +6,7 @@ const BRANCHES = [
   'linux-basics', 'files-permissions', 'processes', 'text-processing', 'docker-basics',
   'images-dockerfile', 'volumes-networks', 'compose', 'troubleshooting',
   'systemd', 'network-tools', 'performance',
-  'version-control', 'git-branching', 'git-remotes', 'kubernetes', 'k8s-networking', 'k8s-troubleshooting', 'k8s-storage', 'k8s-scheduling', 'k8s-traffic', 'k8s-rbac-helm', 'cicd', 'cicd-gitlab', 'deploy-strategies', 'gitops', 'cloud-aws', 'cloud-iac', 'iac-patterns', 'config-mgmt', 'observability', 'security',
+  'version-control', 'git-branching', 'git-remotes', 'kubernetes', 'k8s-networking', 'k8s-troubleshooting', 'k8s-storage', 'k8s-scheduling', 'k8s-traffic', 'k8s-rbac-helm', 'cicd', 'cicd-gitlab', 'deploy-strategies', 'gitops', 'cloud-aws', 'cloud-iac', 'iac-patterns', 'config-mgmt', 'observability', 'security', 'incident-response',
 ];
 
 /** Collects every problem in a lesson file, so authors see them all at once. */
@@ -182,6 +182,31 @@ function checkCheck(c: unknown, where: string, p: Problems): void {
     case 'tfState':
     case 'tfNoChanges':
       needs('dir');
+      break;
+    case 'promqlMatches':
+      needs('file');
+      needs('reference');
+      break;
+    case 'alertState':
+    case 'ruleLoaded':
+      needs('name');
+      break;
+    case 'trivyClean':
+      needs('image');
+      break;
+    case 'configClean':
+    case 'secretsClean':
+    case 'certFile':
+      needs('path');
+      break;
+    case 'awsKey':
+      needs('id');
+      break;
+    case 'reachable':
+      needs('host');
+      break;
+    case 'sshdSetting':
+      needs('key');
       break;
   }
   for (const key of ['regex', 'pattern'] as const) {

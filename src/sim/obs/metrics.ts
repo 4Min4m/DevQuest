@@ -1,5 +1,6 @@
 /** Metric time series computed from their models: counters integrate rates, histograms follow a log-normal latency. */
 import { clusterOf, getObj } from '../kube/cluster';
+import { diskUsage, mountFor } from '../disk';
 import type { SimState } from '../state';
 import { Vfs } from '../vfs/vfs';
 import type { ObsState, Phase, Pred, SeriesSpec } from './types';
@@ -28,6 +29,20 @@ function evalPred(state: SimState, p: Pred): boolean {
     } catch {
       return false;
     }
+  }
+  if ('deploymentScaled' in p) {
+    try {
+      const d = getObj(clusterOf(state), 'Deployment', p.deploymentScaled.namespace ?? 'default', p.deploymentScaled.name) as { spec?: { replicas?: number } } | undefined;
+      return !!d && (d.spec?.replicas ?? 1) > 0;
+    } catch {
+      return false;
+    }
+  }
+  if ('diskUsageBelow' in p) {
+    const d = mountFor(state.disks, p.diskUsageBelow.mount);
+    if (!d) return false;
+    const u = diskUsage(state, d);
+    return (u.usedKb / (u.usedKb + u.availKb)) * 100 < p.diskUsageBelow.percent;
   }
   try {
     return new Vfs(state.fs, { name: 'root', groups: ['root'] }).readFile(p.fileContains.path).includes(p.fileContains.text);

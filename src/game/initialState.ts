@@ -1,6 +1,8 @@
 import { createShell } from '../sim';
 import { createAwsState, DEFAULT_KEY } from '../sim/aws/api';
 import { createMachine } from '../sim/machines';
+import { backdateRules, installStack } from '../sim/obs/install';
+import { keyPem, makeCert, pem } from '../sim/security/tls';
 import { installArgo } from '../sim/kube/argocd';
 import { forgeRepo, registryPush } from '../sim/forge';
 import { blobSha, treeFromFlat, writeBlob, writeCommit } from '../sim/git/objects';
@@ -171,12 +173,36 @@ export function buildInitialState(spec: InitialStateSpec = {}): SimState {
   }
   if (spec.aws) {
     state.aws = createAwsState({ users: spec.aws.users });
+    const ownKeys = new Set(Object.values(spec.aws.keys ?? {}).map((k) => k.user));
+    for (const [id, k] of Object.entries(state.aws.keys)) if (ownKeys.has(k.user) && id !== DEFAULT_KEY.id) delete state.aws.keys[id];
+    for (const [id, k] of Object.entries(spec.aws.keys ?? {})) state.aws.keys[id] = { ...k, status: 'Active', created: state.clock - 200 * 86400000 };
     if (spec.aws.configured !== false) {
       const home = state.vars.HOME;
       const learner = new Vfs(state.fs, identityOf(state), () => state.clock);
       learner.mkdir(`${home}/.aws`, { parents: true });
       learner.writeFile(`${home}/.aws/credentials`, `[default]\naws_access_key_id = ${DEFAULT_KEY.id}\naws_secret_access_key = ${DEFAULT_KEY.secret}\n`);
       learner.writeFile(`${home}/.aws/config`, `[default]\nregion = ${spec.aws.region ?? 'us-east-1'}\noutput = json\n`);
+    }
+  }
+  if (spec.pki) {
+    const day = 86400000;
+    const caKeyId = blobSha('ca:' + (spec.pki.ca ?? 'DevQuest Internal CA'));
+    const ca = makeCert({ subject: { CN: spec.pki.ca ?? 'DevQuest Internal CA', O: 'DevQuest' }, days: 3650, from: state.clock - 400 * day, keyId: caKeyId, isCA: true });
+    const put = (p: string, c: string, mode = 0o644) => {
+      vfs.mkdir(dirname(p), { parents: true });
+      vfs.writeFile(p, c);
+      vfs.chmod(p, mode);
+    };
+    if (spec.pki.caCert) put(spec.pki.caCert, pem('cert', ca));
+    if (spec.pki.caKey) put(spec.pki.caKey, keyPem(caKeyId), 0o600);
+    if (spec.pki.trusted !== false) put('/etc/ssl/certs/devquest-internal-ca.pem', pem('cert', ca));
+    for (const [path, c] of Object.entries(spec.pki.certs ?? {})) {
+      const keyId = blobSha('leaf:' + path);
+      const valid = c.validDays ?? 90;
+      const notAfter = state.clock + c.daysLeft * day;
+      const cert = makeCert({ subject: { CN: c.cn }, issuer: c.selfSigned ? undefined : ca.subject, sans: c.sans ?? [c.cn], days: valid, from: notAfter - valid * day, keyId, issuerKeyId: c.selfSigned ? keyId : caKeyId });
+      put(path, pem('cert', cert));
+      put(c.key, keyPem(keyId), 0o600);
     }
   }
   if (spec.remotes && state.net) state.net.remotes.push(...spec.remotes);
@@ -189,6 +215,8 @@ export function buildInitialState(spec: InitialStateSpec = {}): SimState {
     if (existing) Object.assign(existing, d);
     else state.disks.push({ filesystem: d.filesystem ?? `/dev/sdb1`, size: d.size ?? 10485760, used: d.used ?? 0, ...d });
   }
+
+  if (spec.observability) installStack(state, spec.observability);
 
   if (spec.setup?.length) {
     // When the starting directory is created by setup (e.g. a clone), setup itself starts in $HOME.
@@ -212,6 +240,14 @@ export function buildInitialState(spec: InitialStateSpec = {}): SimState {
     state.cwd = spec.cwd ? normalize(spec.cwd) : state.vars.HOME;
     state.vars.PWD = state.cwd;
     delete state.oldCwd;
+  }
+
+  if (spec.observability) {
+    // The mission starts now: models are relative to this moment.
+    if (!state.obs) installStack(state, spec.observability);
+    state.obs!.epoch = state.clock;
+    state.obs!.predLog = {};
+    if (spec.observability.firingSince !== undefined) backdateRules(state, spec.observability.firingSince);
   }
 
   // Branch protection applies after setup, so setup itself can seed the protected branches.

@@ -114,6 +114,7 @@ export function createMachine(spec: MachineSpec, clock?: number): SimState {
     vfs.mkdir(p.replace(/\/[^/]*$/, '') || '/', { parents: true });
     vfs.writeFile(p, c);
   }
+  m.sshdLoaded = vfs.readFile('/etc/ssh/sshd_config');
   if (spec.packages?.length) {
     m.aptLists = true;
     aptInstall(m, spec.packages, { assumeYes: true });

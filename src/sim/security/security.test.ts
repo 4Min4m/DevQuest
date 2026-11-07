@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+
+/** A fake key, assembled so secret scanners don't flag this file. */
+const LEAK = ['AK', 'IAQWERTYU', 'IOPASDFGH'].join('');
 import { makeShell } from '../testing';
 import { createMachine } from '../machines';
 import { createAwsState, DEFAULT_KEY } from '../aws/api';
@@ -83,7 +86,7 @@ describe('trivy', () => {
     const c = t.run('trivy config -q k8s');
     expect(c.out).toContain('AVD-KSV-0017 (HIGH)');
     expect(c.out).toContain('Failures: 6');
-    t.setup("printf 'AWS_ACCESS_KEY_ID=AKIAQWERTYUIOPASDFGH\\n' > k8s/.env");
+    t.setup(`printf 'AWS_ACCESS_KEY_ID=${LEAK}\\n' > k8s/.env`);
     expect(t.run('trivy fs -q --scanners secret k8s').out).toContain('CRITICAL: AWS Access Key ID (aws-access-token)');
   });
 });
@@ -91,7 +94,7 @@ describe('trivy', () => {
 describe('gitleaks', () => {
   it('finds secrets in git history even after deletion', () => {
     const t = makeShell();
-    t.setup('mkdir api', 'cd api', 'git init -q', "printf 'DB_HOST=db\\nAWS_ACCESS_KEY_ID=AKIAQWERTYUIOPASDFGH\\n' > .env", 'git add .', "git commit -qm 'add config'", 'git rm -q .env', 'git commit -qm "remove env"');
+    t.setup('mkdir api', 'cd api', 'git init -q', `printf 'DB_HOST=db\\nAWS_ACCESS_KEY_ID=${LEAK}\\n' > .env`, 'git add .', "git commit -qm 'add config'", 'git rm -q .env', 'git commit -qm "remove env"');
     const r = t.run('gitleaks git -v');
     expect(r.code).toBe(1);
     expect(r.out).toContain('RuleID:      aws-access-token');

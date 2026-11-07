@@ -119,8 +119,14 @@ export function loadRules(state: SimState): { msg: string; prio: number }[] {
     obs.loaded = { pid: proc.pid, groups: obs.loaded?.groups ?? [], error: errs.join('\n') };
     return [{ msg: `ts=${new Date(state.clock).toISOString()} caller=main.go:1171 level=error msg="Error reloading config" err="one or more errors occurred while applying the new configuration (--config.file=${PROM_CONFIG})" errors="${errs[0].replace(/"/g, '\\"')}"`, prio: 3 }];
   }
+  const restarted = obs.loaded?.pid !== proc.pid;
+  const since: Record<string, number> = {};
+  for (const g of groups) for (const r of g.rules) {
+    const k = `${r.alert ?? r.record}|${r.expr}|${r.for ?? ''}`;
+    since[k] = !restarted && obs.ruleSince?.[k] !== undefined ? obs.ruleSince[k] : state.clock;
+  }
+  obs.ruleSince = since;
   obs.loaded = { pid: proc.pid, groups };
-  (obs as { loadedAt?: number }).loadedAt = state.clock;
   return [{ msg: `ts=${new Date(state.clock).toISOString()} caller=main.go:1213 level=info msg="Completed loading of configuration file" filename=${PROM_CONFIG}`, prio: 6 }];
 }
 
@@ -128,12 +134,7 @@ export function loadRules(state: SimState): { msg: string; prio: number }[] {
 function ensureLoaded(state: SimState) {
   const proc = promProcess(state);
   if (!proc || !state.obs) return;
-  if (state.obs.loaded?.pid !== proc.pid) {
-    const startedAt = state.clock;
-    loadRules(state);
-    (state.obs as { loadedAt?: number }).loadedAt ??= startedAt;
-    if (state.obs.loaded && !state.obs.loaded.error) (state.obs as { loadedAt?: number }).loadedAt = startedAt;
-  }
+  if (state.obs.loaded?.pid !== proc.pid) loadRules(state);
 }
 
 reloadHooks.push((state, _unit, exe) => (/prometheus$/.test(exe) ? loadRules(state) : undefined));
@@ -188,7 +189,6 @@ export function activeAlerts(state: SimState): AlertInstance[] {
   const obs = state.obs;
   if (!obs?.loaded || !promProcess(state)) return [];
   const t = now(state);
-  const since = Math.floor(((obs as { loadedAt?: number }).loadedAt ?? state.clock) / 1000);
   const out: AlertInstance[] = [];
   for (const g of obs.loaded.groups) {
     for (const r of g.rules) {
@@ -196,6 +196,7 @@ export function activeAlerts(state: SimState): AlertInstance[] {
       const v = promQuery(state, r.expr, t);
       if (v.type !== 'vector') continue;
       const forSec = r.for ? parseDuration(r.for) : 0;
+      const since = Math.floor((obs.ruleSince?.[`${r.alert}|${r.expr}|${r.for ?? ''}`] ?? state.clock) / 1000);
       for (const s of v.v) {
         const key = JSON.stringify(Object.entries(s.labels).filter(([k]) => k !== '__name__').sort());
         // Walk back to find when this series started matching (bounded by rule load time).

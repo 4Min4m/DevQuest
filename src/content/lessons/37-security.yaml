@@ -1,0 +1,410 @@
+id: security
+title: DevSecOps essentials
+branch: security
+prerequisites: [observability]
+sources:
+  - 10-Security/01-Security-Fundamentals
+  - 10-Security/02-Secrets-Management
+  - 10-Security/03-Supply-Chain-Security
+  - 10-Security/04-Network-Security
+theory: |
+  **Shift left:** catch problems where they're cheapest — in the Dockerfile, the commit, the pipeline
+  — not in production. **Least privilege** and **defense in depth** do the rest.
+
+  | Risk | Tool here | Fix |
+  |---|---|---|
+  | Known CVEs in base images and dependencies | `trivy image --severity HIGH,CRITICAL --exit-code 1 IMG` | newer/smaller base (`-slim`, alpine, distroless), bump packages |
+  | Misconfigurations (root containers, privileged pods, open security groups) | `trivy config DIR` | non-root `USER`, `securityContext`, tighter rules |
+  | Secrets in code / git history | `gitleaks git -v` | **rotate the secret first**, then remove it and ignore the file |
+  | Expired or wrong TLS certificates | `openssl x509 -noout -dates -ext subjectAltName`, `openssl s_client` | reissue (with SANs!), install, restart |
+  | Exposed services on a host | `ufw status`, `ss -tlnp` | default deny, allow only what's needed |
+  | Weak SSH | `sshd -t`, `sshd -T` | `PermitRootLogin no`, `PasswordAuthentication no`, keys only |
+
+  **A leaked key is compromised the moment it's pushed.** Deleting the file in a new commit doesn't
+  help — it's still in history and in every clone. Rotate: create a new key, switch consumers to it,
+  deactivate and delete the old one (`aws iam update-access-key --status Inactive`). Then clean up
+  and prevent repeats (`.gitignore`, a pre-commit hook, gitleaks in CI).
+
+  **TLS:** clients check the chain up to a trusted CA, the validity dates and that the host name is in
+  the certificate's **Subject Alternative Names** (the CN alone isn't enough any more). A service reads
+  its certificate at start — restart it after replacing the file.
+missions:
+  - id: trivy-base-image
+    title: Patch an image with known CVEs
+    type: guided
+    prompt: |
+      The security gate in CI runs `trivy image --severity HIGH,CRITICAL --exit-code 1` and fails on
+      `shop:1`, built from `~/shop`.
+
+      **Build `shop:2` from `~/shop` with no HIGH or CRITICAL findings** — fix the base image and the
+      vulnerable Python dependencies.
+    initialState:
+      cwd: /home/student/shop
+      files:
+        /home/student/shop/Dockerfile: |
+          FROM python:3.8
+          WORKDIR /app
+          COPY requirements.txt .
+          COPY app.py .
+          CMD ["python3", "app.py"]
+        /home/student/shop/requirements.txt: |
+          flask==0.12.2
+          pyyaml==5.3
+          gunicorn==22.0.0
+        /home/student/shop/app.py: |
+          print("shop")
+      setup:
+        - docker build -q -t shop:1 .
+    hints:
+      - text: "`trivy image -q --severity HIGH,CRITICAL shop:1` lists the OS packages (from the base image) and the Python packages separately."
+        cost: 5
+      - text: "A current slim base drops almost all OS findings: `FROM python:3.12-slim`."
+        cost: 5
+      - text: "The 'Fixed Version' column says how far to bump: e.g. `flask==3.0.3`, `pyyaml==6.0.1`. Then `docker build -t shop:2 .`."
+        cost: 10
+    validator:
+      checks:
+        - type: trivyClean
+          image: shop:2
+          severity: [HIGH, CRITICAL]
+        - type: imageExists
+          ref: shop:2
+    xp: 70
+    par: 6
+    solution:
+      - trivy image -q --severity HIGH,CRITICAL shop:1
+      - sed -i 's/FROM python:3.8/FROM python:3.12-slim/' Dockerfile
+      - sed -i 's/flask==0.12.2/flask==3.0.3/' requirements.txt
+      - sed -i 's/pyyaml==5.3/pyyaml==6.0.1/' requirements.txt
+      - docker build -q -t shop:2 .
+      - trivy image -q --severity HIGH,CRITICAL --exit-code 1 shop:2
+    explain: |
+      Most findings came from the **base image** (an old Debian with old curl, zlib, glibc) — you
+      inherit every package it ships, used or not. Slim, distroless or alpine bases shrink that
+      surface; pinning versions in `requirements.txt` makes updates deliberate. Rebuild regularly:
+      new CVEs are published against images that haven't changed.
+
+  - id: leaked-key
+    title: A key in the git history
+    type: guided
+    prompt: |
+      A teammate thinks they once committed cloud credentials to `~/billing` and "removed them later".
+
+      **Scan the history, deactivate the leaked AWS key (it belongs to the IAM user `ci-bot`), and make
+      sure the current tree no longer contains or tracks the secrets file — and never will again.**
+    initialState:
+      aws:
+        users: { student: ["*"], ci-bot: ["s3:*"] }
+        keys:
+          __LEAKED_AWS_KEY_ID__: { secret: "__LEAKED_AWS_SECRET__", user: ci-bot }
+      cwd: /home/student/billing
+      files:
+        /home/student/billing/app.py: |
+          import os
+          BUCKET = os.environ["INVOICE_BUCKET"]
+      setup:
+        - git init -q
+        - git add app.py
+        - git commit -qm "Initial invoice service"
+        - "printf 'INVOICE_BUCKET=acme-invoices\\nAWS_ACCESS_KEY_ID=__LEAKED_AWS_KEY_ID__\\nAWS_SECRET_ACCESS_KEY=__LEAKED_AWS_SECRET__\\n' > .env"
+        - git add .env
+        - git commit -qm "Add config for CI"
+        - "printf 'INVOICE_BUCKET=acme-invoices\\n' > .env"
+        - git commit -qam "Remove credentials"
+    hints:
+      - text: "`gitleaks git -v` scans every commit — the key is still in history even though the latest `.env` looks clean."
+        cost: 5
+      - text: "Rotation comes first: `aws iam update-access-key --user-name ci-bot --access-key-id AKIA... --status Inactive` (create a replacement with `aws iam create-access-key --user-name ci-bot`)."
+        cost: 10
+      - text: "`git rm --cached .env`, `echo .env >> .gitignore`, commit both."
+        cost: 5
+    validator:
+      checks:
+        - type: anyOf
+          checks:
+            - { type: awsKey, id: __LEAKED_AWS_KEY_ID__, status: Inactive }
+            - { type: awsKey, id: __LEAKED_AWS_KEY_ID__, exists: false }
+          message: The leaked key must be deactivated or deleted — it's compromised.
+        - type: not
+          check: { type: gitTracked, path: /home/student/billing, file: .env }
+          message: "`.env` should no longer be tracked by git."
+        - type: fileContains
+          path: /home/student/billing/.gitignore
+          regex: (^|\n)/?\.env\s*($|\n)
+        - type: commandUsed
+          command: gitleaks
+    xp: 70
+    par: 7
+    solution:
+      - gitleaks git -v || true
+      - aws iam create-access-key --user-name ci-bot
+      - aws iam update-access-key --user-name ci-bot --access-key-id __LEAKED_AWS_KEY_ID__ --status Inactive
+      - git rm -q --cached .env
+      - echo .env >> .gitignore
+      - git add .gitignore
+      - git commit -qm "Stop tracking .env"
+    explain: |
+      The "Remove credentials" commit fixed nothing: the key sat in history, in every clone and fork.
+      Deactivating it is what actually stops an attacker. Rewriting history (`git filter-repo`) is
+      optional hygiene afterwards, and needs everyone to re-clone. Prevent the next one: secrets in a
+      secrets manager or CI secrets, `.env` in `.gitignore`, and gitleaks as a pre-commit hook and a CI
+      step.
+
+  - id: tls-renew
+    title: Renew an expired certificate
+    type: guided
+    prompt: |
+      `https://shop.local` (the `shop` service on this host) started failing for every client this
+      morning.
+
+      **Issue a new 90-day certificate for `shop.local` from the internal CA in
+      `/etc/ssl/devquest-ca/`, install it as `/etc/shop/tls/shop.crt` (keep the existing key), and get
+      `curl https://shop.local` working without `-k`.**
+    initialState:
+      pki:
+        ca: DevQuest Internal CA
+        caCert: /etc/ssl/devquest-ca/ca.pem
+        caKey: /etc/ssl/devquest-ca/ca.key
+        certs:
+          /etc/shop/tls/shop.crt: { cn: shop.local, sans: [shop.local], daysLeft: -1, key: /etc/shop/tls/shop.key }
+      binaries:
+        /usr/local/bin/shop: { name: shop, listen: 443, tls: { cert: /etc/shop/tls/shop.crt, key: /etc/shop/tls/shop.key }, http: { "/": { body: "shop ok\n" } } }
+      files:
+        /usr/local/bin/shop: { content: "ELF", mode: "755" }
+        /etc/systemd/system/shop.service: |
+          [Unit]
+          Description=Shop HTTPS frontend
+          After=network.target
+
+          [Service]
+          ExecStart=/usr/local/bin/shop
+          Restart=on-failure
+
+          [Install]
+          WantedBy=multi-user.target
+      setup:
+        - echo '127.0.0.1 shop.local' | sudo tee -a /etc/hosts
+        - sudo systemctl daemon-reload
+        - sudo systemctl enable --now shop
+    hints:
+      - text: "`curl -sS https://shop.local` says why it fails; `openssl x509 -in /etc/shop/tls/shop.crt -noout -subject -enddate` confirms."
+        cost: 5
+      - text: "A CSR from the existing key: `sudo openssl req -new -key /etc/shop/tls/shop.key -out shop.csr -subj \"/CN=shop.local\" -addext \"subjectAltName=DNS:shop.local\"`."
+        cost: 10
+      - text: "Sign it: `sudo openssl x509 -req -in shop.csr -CA /etc/ssl/devquest-ca/ca.pem -CAkey /etc/ssl/devquest-ca/ca.key -copy_extensions copy -days 90 -out shop.crt` (without `-copy_extensions` the SAN is dropped)."
+        cost: 15
+      - text: "`sudo cp shop.crt /etc/shop/tls/shop.crt`, then `sudo systemctl restart shop` — it only reads the file at start."
+        cost: 5
+    validator:
+      checks:
+        - type: httpResponds
+          url: https://shop.local
+          contains: shop ok
+        - type: certFile
+          path: /etc/shop/tls/shop.crt
+          minDays: 60
+          san: shop.local
+    xp: 80
+    par: 7
+    solution:
+      - curl -sS https://shop.local || true
+      - openssl x509 -in /etc/shop/tls/shop.crt -noout -subject -enddate
+      - sudo openssl req -new -key /etc/shop/tls/shop.key -out shop.csr -subj "/CN=shop.local" -addext "subjectAltName=DNS:shop.local"
+      - sudo openssl x509 -req -in shop.csr -CA /etc/ssl/devquest-ca/ca.pem -CAkey /etc/ssl/devquest-ca/ca.key -copy_extensions copy -days 90 -out shop.crt
+      - sudo cp shop.crt /etc/shop/tls/shop.crt
+      - sudo systemctl restart shop
+      - curl -sS https://shop.local
+    explain: |
+      Certificates expire on purpose; outages happen because nobody owned the renewal. Automate it
+      (ACME / cert-manager / Vault PKI), monitor expiry (`openssl x509 -checkend 2592000`, or a
+      blackbox-exporter alert on `probe_ssl_earliest_cert_expiry`), and remember the two classic
+      traps: forgetting the SAN, and forgetting to reload the service.
+
+  - id: harden-server
+    title: Lock down a server
+    type: free
+    prompt: |
+      `web1` was set up in a hurry: no firewall, root may log in over SSH, passwords are accepted, and
+      a metrics exporter on port 9100 is open to everyone.
+
+      **Harden it: a firewall that allows only SSH (22) and HTTP (80), root login and password
+      authentication disabled in sshd (applied, not just edited) — without locking yourself out.**
+      You log in as `ubuntu`.
+    initialState:
+      machines:
+        - hostname: web1
+          ip: 10.0.2.11
+          packages: [nginx, prometheus-node-exporter]
+          aptUpdated: true
+          files:
+            /etc/ssh/sshd_config: |
+              Include /etc/ssh/sshd_config.d/*.conf
+              PermitRootLogin yes
+              PasswordAuthentication yes
+              KbdInteractiveAuthentication no
+              UsePAM yes
+              X11Forwarding yes
+              PrintMotd no
+              AcceptEnv LANG LC_*
+              Subsystem sftp /usr/lib/openssh/sftp-server
+    hints: []
+    validator:
+      checks:
+        - type: reachable
+          host: web1
+          port: 9100
+          open: false
+          message: Port 9100 should be blocked by the firewall.
+        - type: reachable
+          host: web1
+          port: 80
+          open: true
+        - type: reachable
+          host: web1
+          port: 22
+          open: true
+          message: SSH must stay reachable — don't lock yourself out!
+        - type: onHost
+          host: web1
+          check: { type: sshdSetting, key: PermitRootLogin, value: "no" }
+        - type: onHost
+          host: web1
+          check: { type: sshdSetting, key: PasswordAuthentication, value: "no" }
+    xp: 80
+    par: 7
+    solution:
+      - ssh ubuntu@web1 sudo ufw allow OpenSSH
+      - ssh ubuntu@web1 sudo ufw allow 80/tcp
+      - ssh ubuntu@web1 sudo ufw --force enable
+      - "ssh ubuntu@web1 sudo sed -i 's/^PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config"
+      - "ssh ubuntu@web1 sudo sed -i 's/^PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config"
+      - ssh ubuntu@web1 sudo sshd -t
+      - ssh ubuntu@web1 sudo systemctl reload ssh
+    explain: |
+      Order matters: allow SSH *before* `ufw enable`, and run `sshd -t` before reloading — a broken
+      `sshd_config` on a remote box is how people lose access. The default-deny firewall closed 9100
+      without touching the exporter; keep an existing session open while you test a new login.
+
+  - id: security-quiz
+    title: Security check
+    type: quiz
+    prompt: DevSecOps instincts.
+    xp: 30
+    questions:
+      - kind: single
+        prompt: You find an API key committed 3 months ago. First action?
+        options:
+          - Delete the file and push
+          - Rewrite git history
+          - Revoke/rotate the key, then clean up
+          - Make the repo private
+        answer: 2
+      - kind: single
+        prompt: Why does `trivy image` report vulnerabilities in packages your app never calls?
+        options:
+          - It's a false positive
+          - They're installed in the image (mostly from the base) and could be used by an attacker
+          - Trivy scans the host
+          - Only for Python images
+        answer: 1
+      - kind: single
+        prompt: "curl says `no alternative certificate subject name matches target host name`. The cert's CN is right. Cause?"
+        options:
+          - The certificate has no SAN for that name
+          - The CA isn't trusted
+          - It expired
+          - The key is wrong
+        answer: 0
+      - kind: single
+        prompt: Which securityContext setting is the biggest red flag?
+        options: ["readOnlyRootFilesystem: false", "privileged: true", "runAsUser: 1000", "allowPrivilegeEscalation: false"]
+        answer: 1
+      - kind: single
+        prompt: Least privilege for a CI job that deploys to one Kubernetes namespace?
+        options:
+          - cluster-admin, it's simpler
+          - A ServiceAccount with a Role limited to that namespace and the verbs it needs
+          - The developer's own kubeconfig
+          - No auth inside the cluster
+        answer: 1
+
+  - id: boss-privileged-pods
+    title: "Boss: the audit finding"
+    type: boss
+    prompt: |
+      🔒 The security audit flagged the `api` workload in `~/k8s/api.yaml`: `trivy config` reports
+      HIGH findings, and it runs in production like that.
+
+      **Make `trivy config ~/k8s` report no HIGH or CRITICAL findings, apply the fixed manifest, and keep
+      all 2 replicas running.**
+    initialState:
+      cwd: /home/student/k8s
+      kubeImages:
+        ghcr.io/acme/api:3.2:
+          listen: [8080]
+          logs: ["api 3.2 listening on :8080"]
+          http: { "/": { body: "api ok\n" } }
+      files:
+        /home/student/k8s/api.yaml: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: api
+            labels: { app: api }
+          spec:
+            replicas: 2
+            selector:
+              matchLabels: { app: api }
+            template:
+              metadata:
+                labels: { app: api }
+              spec:
+                hostNetwork: true
+                containers:
+                  - name: api
+                    image: ghcr.io/acme/api:3.2
+                    ports:
+                      - containerPort: 8080
+                    securityContext:
+                      privileged: true
+                    resources:
+                      limits:
+                        memory: 256Mi
+      setup:
+        - kubectl apply -f api.yaml
+        - kubectl rollout status deployment/api
+    hints: []
+    validator:
+      checks:
+        - type: configClean
+          path: /home/student/k8s
+          severity: [HIGH, CRITICAL]
+        - type: kubeResource
+          kind: Deployment
+          name: api
+          path: spec.template.spec.containers.0.securityContext.privileged
+          equals: "false"
+        - type: kubeResource
+          kind: Deployment
+          name: api
+          path: spec.template.spec.containers.0.securityContext.readOnlyRootFilesystem
+          equals: "true"
+        - type: kubeRollout
+          name: api
+          image: ghcr.io/acme/api:3.2
+          replicas: 2
+    xp: 150
+    par: 6
+    solution:
+      - trivy config -q --severity HIGH,CRITICAL .
+      - "sed -i '/hostNetwork: true/d' api.yaml"
+      - "sed -i 's/privileged: true/privileged: false\\n            readOnlyRootFilesystem: true\\n            allowPrivilegeEscalation: false/' api.yaml"
+      - trivy config -q --severity HIGH,CRITICAL --exit-code 1 .
+      - kubectl apply -f api.yaml
+      - kubectl rollout status deployment/api
+    explain: |
+      `privileged: true` gives the container every capability and the host's devices; `hostNetwork`
+      puts it on the node's network namespace — together a container escape is a step away. A
+      read-only root filesystem stops attackers from dropping tools. Next steps: `runAsNonRoot`,
+      `capabilities: drop: [ALL]`, and enforce it cluster-wide with Pod Security Admission
+      (`pod-security.kubernetes.io/enforce: restricted`) so the next manifest can't regress.

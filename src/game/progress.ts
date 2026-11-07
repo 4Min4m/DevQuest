@@ -320,6 +320,7 @@ export const BRANCHES: { id: BranchId; title: string; icon: string; track: Track
   { id: 'config-mgmt', title: 'Ansible', icon: '📜', track: 'cloud' },
   { id: 'observability', title: 'Observability', icon: '📊', track: 'operations' },
   { id: 'security', title: 'Security', icon: '🛡️', track: 'operations' },
+  { id: 'incident-response', title: 'Incident Response', icon: '🚨', track: 'operations' },
 ];
 
 /** Lessons grouped the way the skill tree shows them (by branch order, then file order). */

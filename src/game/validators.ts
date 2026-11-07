@@ -13,6 +13,7 @@ import { describeGit, evaluateGit, GIT_CHECK_TYPES, GitCheck } from './gitChecks
 import { describeKube, evaluateKube, KUBE_CHECK_TYPES, KubeCheck } from './kubeChecks';
 import { CI_CHECK_TYPES, CiCheck, describeCi, evaluateCi } from './ciChecks';
 import { describeInfra, evaluateInfra, hostState, INFRA_CHECK_TYPES, InfraCheck } from './infraChecks';
+import { describeOps, evaluateOps, OPS_CHECK_TYPES, OpsCheck } from './opsChecks';
 
 /** What a validator can look at: the final machine plus what the learner saw. */
 export interface ValidationContext {
@@ -114,6 +115,7 @@ export function describe(check: Check): string {
     default:
       if ((CI_CHECK_TYPES as readonly string[]).includes(check.type)) return describeCi(check as CiCheck);
       if ((INFRA_CHECK_TYPES as readonly string[]).includes(check.type)) return describeInfra(check as InfraCheck);
+      if ((OPS_CHECK_TYPES as readonly string[]).includes(check.type)) return describeOps(check as OpsCheck);
       if ((KUBE_CHECK_TYPES as readonly string[]).includes(check.type)) return describeKube(check as KubeCheck);
       return describeGit(check as GitCheck);
   }
@@ -284,6 +286,7 @@ function evaluate(check: Check, ctx: ValidationContext): boolean {
     default:
       if ((CI_CHECK_TYPES as readonly string[]).includes(check.type)) return evaluateCi(check as CiCheck, state);
       if ((INFRA_CHECK_TYPES as readonly string[]).includes(check.type)) return evaluateInfra(check as InfraCheck, state);
+      if ((OPS_CHECK_TYPES as readonly string[]).includes(check.type)) return evaluateOps(check as OpsCheck, state);
       if ((KUBE_CHECK_TYPES as readonly string[]).includes(check.type)) return evaluateKube(check as KubeCheck, state);
       return evaluateGit(check as GitCheck, state);
   }
@@ -308,5 +311,5 @@ export const CHECK_TYPES: readonly Check['type'][] = [
   'processRunning', 'processAbsent', 'commandUsed', 'outputContains', 'anyOf', 'not',
   'containerRunning', 'containerAbsent', 'containerPort', 'containerEnv', 'containerMount', 'containerNetwork',
   'containerInspect', 'containerFile', 'imageExists', 'imageInspect', 'volumeExists', 'networkExists', 'httpResponds',
-  'serviceActive', 'serviceEnabled', 'diskUsageBelow', 'inodeUsageBelow', 'onHost', ...GIT_CHECK_TYPES, ...KUBE_CHECK_TYPES, ...CI_CHECK_TYPES, ...INFRA_CHECK_TYPES,
+  'serviceActive', 'serviceEnabled', 'diskUsageBelow', 'inodeUsageBelow', 'onHost', ...GIT_CHECK_TYPES, ...KUBE_CHECK_TYPES, ...CI_CHECK_TYPES, ...INFRA_CHECK_TYPES, ...OPS_CHECK_TYPES,
 ];

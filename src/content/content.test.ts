@@ -18,10 +18,11 @@ describe('lesson catalog', () => {
       'k8s-storage', 'k8s-scheduling', 'k8s-traffic', 'k8s-rbac-helm',
       'cicd', 'cicd-gitlab', 'deploy-strategies', 'gitops',
       'cloud-aws', 'cloud-iac', 'iac-patterns', 'config-mgmt',
+      'observability', 'security', 'incident-response',
     ]);
     const missions = lessons.flatMap((l) => l.missions);
-    expect(missions.filter((m) => m.type === 'guided' || m.type === 'free')).toHaveLength(89); // 8 Linux + 8 Docker + 7 services/network/performance + 13 Git + 25 Kubernetes + 12 CI/CD + 16 Cloud & IaC
-    expect(missions.filter((m) => m.type === 'boss')).toHaveLength(25);
+    expect(missions.filter((m) => m.type === 'guided' || m.type === 'free')).toHaveLength(100); // 8 Linux + 8 Docker + 7 services/network/performance + 13 Git + 25 Kubernetes + 12 CI/CD + 16 Cloud & IaC + 11 Observability, Security & Incidents
+    expect(missions.filter((m) => m.type === 'boss')).toHaveLength(29);
     expect(missions.filter((m) => m.type === 'quiz').length).toBeGreaterThanOrEqual(20);
   });
 

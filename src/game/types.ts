@@ -48,7 +48,8 @@ export type BranchId =
   | 'iac-patterns'
   | 'config-mgmt'
   | 'observability'
-  | 'security';
+  | 'security'
+  | 'incident-response';
 
 export interface Lesson {
   id: string;
@@ -147,6 +148,26 @@ export type Check = CheckBase &
     | { type: 'tfState'; dir: string; address?: string; attr?: string; equals?: unknown; output?: string; count?: number; exists?: boolean }
     /** `terraform plan` in `dir` reports no changes (config and real infrastructure agree). */
     | { type: 'tfNoChanges'; dir: string }
+    /** The PromQL query in `file` returns the same series (labels) and values as `reference`. */
+    | { type: 'promqlMatches'; file: string; reference: string; tolerance?: number }
+    /** A Prometheus alert's current state (active = pending or firing). */
+    | { type: 'alertState'; name: string; state?: 'firing' | 'pending' | 'active' | 'inactive' | 'silenced'; labels?: Record<string, string>; comment?: string }
+    /** Prometheus loaded this alerting/recording rule (after a reload). */
+    | { type: 'ruleLoaded'; name: string; for?: string; labels?: Record<string, string> }
+    /** trivy finds no vulnerabilities of these severities (default HIGH, CRITICAL) in the image. */
+    | { type: 'trivyClean'; image: string; severity?: string[] }
+    /** trivy config finds no misconfigurations of these severities (optionally only these ids) under path. */
+    | { type: 'configClean'; path: string; severity?: string[]; ids?: string[] }
+    /** No secrets in the files under path (or anywhere in its git history). */
+    | { type: 'secretsClean'; path: string; history?: boolean }
+    /** An AWS access key's status, or that it was deleted. */
+    | { type: 'awsKey'; id: string; status?: 'Active' | 'Inactive'; exists?: boolean }
+    /** Whether the workstation can open a TCP connection to the port on a managed host (firewalls). */
+    | { type: 'reachable'; host: string; port: number; open: boolean }
+    /** A setting of the running sshd (as loaded at its last start/reload). */
+    | { type: 'sshdSetting'; key: string; value: string }
+    /** A certificate file that is valid for at least minDays more days (and covers san). */
+    | { type: 'certFile'; path: string; minDays?: number; san?: string }
     | { type: 'not'; check: Check }
     // ---- Docker
     /** A running container, matched by name and/or image reference. */
@@ -319,10 +340,14 @@ export interface InitialStateSpec {
   projects?: Record<string, ProjectSpec>;
   /** Image references already in the registry (e.g. pushed by earlier CI runs). */
   registryImages?: string[];
+  /** Monitoring stack (Prometheus, Alertmanager, Loki) with metric and log models; `firingSince` backdates rule evaluation (hours). */
+  observability?: import('../sim/obs/install').StackSpec & { firingSince?: number };
+  /** An internal CA (optionally trusted) and certificates issued by it: path → {cn, sans, daysLeft, key}. */
+  pki?: { ca?: string; caCert?: string; caKey?: string; trusted?: boolean; certs?: Record<string, { cn: string; sans?: string[]; daysLeft: number; validDays?: number; key: string; selfSigned?: boolean }> };
   /** Servers on the network for ssh / Ansible (added to /etc/hosts unless hosts: false). */
   machines?: { hostname: string; ip: string; user?: string; sshUsers?: string[]; keyFile?: string; packages?: string[]; files?: Record<string, string>; up?: boolean; hosts?: boolean; aptUpdated?: boolean }[];
   /** A mock AWS account; `configured` (default true) writes ~/.aws credentials for the first IAM user. */
-  aws?: { configured?: boolean; region?: string; users?: Record<string, string[]> };
+  aws?: { configured?: boolean; region?: string; users?: Record<string, string[]>; keys?: Record<string, { secret: string; user: string }> };
   /** Install Argo CD into the cluster (namespace argocd, Application CRDs). */
   argocd?: boolean;
   /** Argo CD Applications to create once it is installed (YAML). */

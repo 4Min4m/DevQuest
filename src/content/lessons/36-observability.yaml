@@ -1,0 +1,387 @@
+id: observability
+title: Metrics, logs and alerts
+branch: observability
+prerequisites: [k8s-troubleshooting]
+sources:
+  - 09-Observability/01-Three-Pillars
+  - 09-Observability/02-Metrics-and-Prometheus
+  - 09-Observability/03-Logging
+  - 09-Observability/05-Dashboards-and-Alerting
+theory: |
+  **Observability** = being able to answer new questions about a running system from the outside.
+  Three pillars: **metrics** (cheap numbers over time — *is* something wrong?), **logs** (events with
+  detail — *what* happened?), **traces** (one request across services — *where* did the time go?).
+
+  **Prometheus** scrapes `/metrics` endpoints every 15 s and stores time series: a metric name plus
+  labels, e.g. `http_requests_total{service="checkout", status="500"}`.
+
+  | Type | Example | Query it with |
+  |---|---|---|
+  | counter (only goes up) | `http_requests_total` | `rate(x[5m])` = per-second increase |
+  | gauge (up and down) | `node_memory_MemAvailable_bytes` | the value, `avg_over_time(x[10m])` |
+  | histogram (buckets `le`) | `http_request_duration_seconds_bucket` | `histogram_quantile(0.99, ...)` |
+
+  **PromQL essentials:**
+  ```promql
+  up == 0                                                     # targets that failed their scrape
+  sum by (service) (rate(http_requests_total[5m]))            # requests/s per service
+  sum by (service) (rate(http_requests_total{status=~"5.."}[5m]))
+    / sum by (service) (rate(http_requests_total[5m]))        # error ratio
+  histogram_quantile(0.99, sum by (le, service) (rate(http_request_duration_seconds_bucket[5m])))
+  ```
+  Always `rate()` a counter before aggregating, and keep `le` in the `by()` for quantiles.
+  Try queries with `promtool query instant http://localhost:9090 'QUERY'`.
+
+  **Alerting rules** live in YAML files Prometheus loads (`promtool check rules` first, then
+  `systemctl reload prometheus`). `for: 5m` keeps an alert **pending** until the condition has held
+  that long — then it **fires** and goes to Alertmanager (`amtool alert`). Alert on symptoms users
+  feel (errors, latency), not on every cause.
+
+  **Logs** in Loki are queried with LogQL: `{app="checkout"} |= "error" | json | status >= 500` —
+  pick streams by label, filter lines, parse, filter fields. `logcli query '...'` runs it.
+missions:
+  - id: promql-up
+    title: Which target is down?
+    type: guided
+    prompt: |
+      Prometheus scrapes three services. One of them stopped answering scrapes a while ago.
+
+      **Find it with PromQL and write its `instance` (e.g. `name:port`) to `~/answer.txt`.**
+    initialState:
+      observability: &stack
+        series:
+          - { name: up, labels: { job: apps, instance: "checkout:8080" }, type: gauge, value: 1 }
+          - { name: up, labels: { job: apps, instance: "catalog:8080" }, type: gauge, value: 1 }
+          - { name: up, labels: { job: apps, instance: "payments:8080" }, type: gauge, value: 1, phases: [{ from: -1500, value: 0 }] }
+          - { name: http_requests_total, labels: { service: checkout, status: "200" }, type: counter, rate: 40 }
+          - { name: http_requests_total, labels: { service: checkout, status: "500" }, type: counter, rate: 1.5 }
+          - { name: http_requests_total, labels: { service: catalog, status: "200" }, type: counter, rate: 120 }
+          - { name: http_requests_total, labels: { service: catalog, status: "404" }, type: counter, rate: 6 }
+          - { name: http_requests_total, labels: { service: payments, status: "200" }, type: counter, rate: 18 }
+          - { name: http_requests_total, labels: { service: payments, status: "503" }, type: counter, rate: 4 }
+          - { name: http_request_duration_seconds, labels: { service: checkout }, type: histogram, rate: 41, latency: { p50: 0.12, p99: 0.8 } }
+          - { name: http_request_duration_seconds, labels: { service: catalog }, type: histogram, rate: 126, latency: { p50: 0.025, p99: 0.18 } }
+          - { name: http_request_duration_seconds, labels: { service: payments }, type: histogram, rate: 22, latency: { p50: 0.3, p99: 2.6 } }
+    hints:
+      - text: "`up` is 1 when a scrape worked and 0 when it failed: `promtool query instant http://localhost:9090 'up'`."
+        cost: 5
+      - text: "Filter with a comparison: `up == 0` returns only the failing targets."
+        cost: 5
+    validator:
+      checks:
+        - type: fileContains
+          path: /home/student/answer.txt
+          text: payments:8080
+        - type: commandUsed
+          command: promtool
+    xp: 40
+    par: 3
+    solution:
+      - promtool query instant http://localhost:9090 'up == 0'
+      - echo payments:8080 > answer.txt
+    explain: |
+      `up` is synthesized by Prometheus itself for every scrape target — the first metric to check
+      when a dashboard goes blank. Comparison operators *filter* series (`up == 0` keeps only the
+      zeros); add `bool` (`up == bool 0`) to get 0/1 values instead.
+
+  - id: promql-error-ratio
+    title: Error ratio per service
+    type: guided
+    prompt: |
+      The SRE dashboard needs one panel: **the fraction of requests answered with a 5xx status, per
+      service, over the last 5 minutes** (0.05 = 5%).
+
+      **Write the PromQL query into `~/queries/error_ratio.promql`.**
+    initialState:
+      observability: *stack
+      files:
+        /home/student/queries/README: "One PromQL query per file.\n"
+    hints:
+      - text: "Counters must go through `rate(...[5m])` first. `status=~\"5..\"` selects 5xx codes."
+        cost: 5
+      - text: "Divide errors by all requests, both summed `by (service)`: `sum by (service) (rate(http_requests_total{status=~\"5..\"}[5m])) / sum by (service) (rate(http_requests_total[5m]))`."
+        cost: 15
+    validator:
+      checks:
+        - type: promqlMatches
+          file: /home/student/queries/error_ratio.promql
+          reference: sum by (service) (rate(http_requests_total{status=~"5.."}[5m])) / sum by (service) (rate(http_requests_total[5m]))
+    xp: 60
+    par: 3
+    solution:
+      - echo 'sum by (service) (rate(http_requests_total{status=~"5.."}[5m])) / sum by (service) (rate(http_requests_total[5m]))' > queries/error_ratio.promql
+      - promtool query instant http://localhost:9090 'sum by (service) (rate(http_requests_total{status=~"5.."}[5m])) / sum by (service) (rate(http_requests_total[5m]))'
+    explain: |
+      Sum *before* dividing: averaging per-instance ratios would weight a quiet instance like a busy
+      one. Note `catalog` has 404s — client errors, not counted. For SLOs you'd keep this as a
+      recording rule (`record: service:http_errors:ratio_rate5m`) so dashboards and alerts share it.
+
+  - id: promql-latency
+    title: p99 latency from a histogram
+    type: guided
+    prompt: |
+      Averages hide the slow requests users complain about.
+
+      **Write a query for the 99th-percentile request latency per service (5-minute window) into
+      `~/queries/p99.promql`.** Which service is slowest?
+    initialState:
+      observability: *stack
+      files:
+        /home/student/queries/README: "One PromQL query per file.\n"
+    hints:
+      - text: "Histograms are stored as cumulative buckets: `http_request_duration_seconds_bucket{le=\"0.5\"}` counts requests faster than 0.5 s."
+        cost: 5
+      - text: "`histogram_quantile(0.99, sum by (le, service) (rate(http_request_duration_seconds_bucket[5m])))` — keep `le` when you aggregate."
+        cost: 15
+    validator:
+      checks:
+        - type: promqlMatches
+          file: /home/student/queries/p99.promql
+          reference: histogram_quantile(0.99, sum by (le, service) (rate(http_request_duration_seconds_bucket[5m])))
+    xp: 60
+    par: 3
+    solution:
+      - echo 'histogram_quantile(0.99, sum by (le, service) (rate(http_request_duration_seconds_bucket[5m])))' > queries/p99.promql
+      - promtool query instant http://localhost:9090 'histogram_quantile(0.99, sum by (le, service) (rate(http_request_duration_seconds_bucket[5m])))'
+    explain: |
+      `histogram_quantile` interpolates inside the bucket where the 99th percentile falls, so the
+      answer is only as precise as your bucket boundaries. Dropping `le` from `by()` destroys the
+      buckets and returns nothing. Here `payments` is the slow one (p99 ≈ 2.5 s).
+
+  - id: alert-rule
+    title: Ship an alerting rule
+    type: guided
+    prompt: |
+      `~/slo.yml` is a draft alert for services that fail more than 5% of requests. It has a bug, and
+      it should only page after the condition holds for **5 minutes**.
+
+      **Fix it (add `for: 5m`), validate it with promtool, install it as
+      `/etc/prometheus/rules/slo.yml` and reload Prometheus.** Then see which service it catches.
+    initialState:
+      observability: *stack
+      files:
+        /home/student/slo.yml: |
+          groups:
+            - name: slo
+              rules:
+                - alert: HighErrorRate
+                  expr: sum by (service) (rate(http_requests_total{status=~"5.."}[5m]) / sum by (service) (rate(http_requests_total[5m])) > 0.05
+                  labels:
+                    severity: page
+                  annotations:
+                    summary: "{{ $labels.service }} is failing {{ $value | humanizePercentage }} of requests"
+    hints:
+      - text: "`promtool check rules slo.yml` points at the broken expression: count the parentheses."
+        cost: 5
+      - text: "`for: 5m` goes at the same indentation as `expr:` and `labels:`."
+        cost: 5
+      - text: "`sudo cp slo.yml /etc/prometheus/rules/` and `sudo systemctl reload prometheus`; `curl -s localhost:9090/api/v1/alerts` shows it pending."
+        cost: 10
+    validator:
+      checks:
+        - type: ruleLoaded
+          name: HighErrorRate
+          for: 5m
+          labels: { severity: page }
+        - type: alertState
+          name: HighErrorRate
+          state: active
+          labels: { service: payments }
+        - type: alertState
+          name: HighErrorRate
+          state: inactive
+          labels: { service: checkout }
+    xp: 80
+    par: 7
+    solution:
+      - promtool check rules slo.yml || true
+      - "sed -i 's/(rate(http_requests_total{status=~\"5..\"}\\[5m\\]) \\//(rate(http_requests_total{status=~\"5..\"}[5m])) \\//' slo.yml"
+      - "sed -i 's/^        labels:/        for: 5m\\n        labels:/' slo.yml"
+      - promtool check rules slo.yml
+      - sudo cp slo.yml /etc/prometheus/rules/slo.yml
+      - sudo systemctl reload prometheus
+      - curl -s localhost:9090/api/v1/alerts
+    explain: |
+      The alert is **pending** right after the reload: Prometheus starts evaluating a new rule from
+      scratch, and `for: 5m` means it must be true for five minutes before it fires (and pages).
+      `for` filters out blips; too long a `for` delays real pages. `payments` (~18% errors) matches,
+      `checkout` (~3.6%) doesn't.
+
+  - id: logs-logcli
+    title: Find the failing order in the logs
+    type: free
+    prompt: |
+      Support says one customer keeps failing to check out. The `checkout` service logs JSON to Loki.
+
+      **Find the order id that fails again and again, and write it to `~/answer.txt`.**
+    initialState:
+      observability:
+        series: []
+        logs:
+          - labels: { app: checkout, env: prod }
+            repeat:
+              every: 7
+              from: -3600
+              lines:
+                - '{"level":"info","msg":"order placed","order":"A-{n}","ms":118}'
+                - '{"level":"info","msg":"order placed","order":"A-{n}","ms":131}'
+                - '{"level":"warn","msg":"retrying payment","order":"A-4471","attempt":2}'
+                - '{"level":"error","msg":"payment failed","order":"A-4471","status":502,"upstream":"payments"}'
+                - '{"level":"info","msg":"order placed","order":"A-{n}","ms":97}'
+          - labels: { app: catalog, env: prod }
+            repeat: { every: 3, from: -3600, lines: ['level=info msg="cache hit" sku=SKU-{n}'] }
+    hints: []
+    validator:
+      checks:
+        - type: fileContains
+          path: /home/student/answer.txt
+          text: A-4471
+        - type: commandUsed
+          command: logcli
+    xp: 60
+    par: 3
+    solution:
+      - logcli query -q --limit=5 '{app="checkout"} | json | level="error"'
+      - echo A-4471 > answer.txt
+    explain: |
+      Structured (JSON or logfmt) logs make this a query instead of a grep marathon: select the stream
+      by label, parse with `| json`, filter on fields. `sum by (order) (count_over_time({app="checkout"}
+      | json | level="error" [1h]))` would rank the offenders. Keep labels low-cardinality (app, env)
+      and put ids like `order` in the log line — every label value creates a new stream.
+
+  - id: observability-quiz
+    title: Observability check
+    type: quiz
+    prompt: PromQL and alerting habits.
+    xp: 30
+    questions:
+      - kind: single
+        prompt: Why `rate(http_requests_total[5m])` instead of `http_requests_total`?
+        options:
+          - The raw counter only ever grows; rate gives requests per second and handles restarts
+          - rate is faster to compute
+          - Counters can't be graphed
+          - It removes labels
+        answer: 0
+      - kind: single
+        prompt: "An alert has `for: 10m`. The condition became true 3 minutes ago. State?"
+        options: [firing, pending, inactive, resolved]
+        answer: 1
+      - kind: single
+        prompt: What should page a human at 3 am?
+        options:
+          - CPU above 80% on one node
+          - A symptom users feel, e.g. checkout error rate above the SLO
+          - Any WARNING log line
+          - A pod restart
+        answer: 1
+      - kind: single
+        prompt: Which is a bad Loki label?
+        options: [app, env, namespace, user_id]
+        answer: 3
+      - kind: single
+        prompt: Metrics vs logs vs traces — which tells you *where* in a chain of services a slow request spent its time?
+        options: [Metrics, Logs, Traces, Dashboards]
+        answer: 2
+
+  - id: boss-latency-regression
+    title: "Boss: paged at 3 am"
+    type: boss
+    prompt: |
+      📟 **CheckoutLatencyHigh** is firing: checkout's p99 latency has been above 1 s for a while.
+      Nothing is down, customers are just waiting… and leaving.
+
+      **Find the cause with metrics and logs, mitigate it, and confirm the alert resolves.**
+      (Metrics use 5-minute windows — give them time to catch up after a change.)
+    initialState:
+      kubeImages:
+        ghcr.io/acme/checkout:2.3.1:
+          listen: [8080]
+          logs: ["checkout 2.3.1 listening on :8080"]
+          http: { "/": { body: "checkout 2.3.1\n" } }
+        ghcr.io/acme/checkout:2.4.0:
+          listen: [8080]
+          logs: ["checkout 2.4.0 listening on :8080", "WARN slow query (1840ms): SELECT * FROM orders WHERE customer_ref = $1 -- no index on orders.customer_ref"]
+          http: { "/": { body: "checkout 2.4.0\n" } }
+      kubeManifests: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: checkout
+          labels: { app: checkout }
+        spec:
+          replicas: 3
+          selector:
+            matchLabels: { app: checkout }
+          template:
+            metadata:
+              labels: { app: checkout }
+            spec:
+              containers:
+              - name: checkout
+                image: ghcr.io/acme/checkout:2.3.1
+                ports:
+                - containerPort: 8080
+      setup:
+        - kubectl rollout status deployment/checkout
+        - kubectl set image deployment/checkout checkout=ghcr.io/acme/checkout:2.4.0
+        - kubectl rollout status deployment/checkout
+      setupAge: 2400
+      observability:
+        firingSince: 6
+        rules:
+          /etc/prometheus/rules/checkout.yml: |
+            groups:
+              - name: checkout
+                rules:
+                  - alert: CheckoutLatencyHigh
+                    expr: histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{service="checkout"}[5m]))) > 1
+                    for: 5m
+                    labels:
+                      severity: page
+                    annotations:
+                      summary: "checkout p99 latency is {{ $value }}s"
+        series:
+          - name: http_request_duration_seconds
+            labels: { service: checkout, version: 2.3.1 }
+            type: histogram
+            rate: 40
+            latency: { p50: 0.09, p99: 0.45 }
+            phases:
+              - { from: -2400, rate: 0, when: { deploymentImage: { name: checkout, image: "ghcr.io/acme/checkout:2.4.0" } } }
+          - name: http_request_duration_seconds
+            labels: { service: checkout, version: 2.4.0 }
+            type: histogram
+            rate: 0
+            phases:
+              - { from: -2400, rate: 40, latency: { p50: 0.6, p99: 3.2 }, when: { deploymentImage: { name: checkout, image: "ghcr.io/acme/checkout:2.4.0" } } }
+          - { name: http_request_duration_seconds, labels: { service: catalog, version: 7.1.0 }, type: histogram, rate: 120, latency: { p50: 0.03, p99: 0.2 } }
+          - { name: http_requests_total, labels: { service: checkout, status: "200" }, type: counter, rate: 40 }
+    hints: []
+    validator:
+      checks:
+        - type: kubeRollout
+          name: checkout
+          image: ghcr.io/acme/checkout:2.3.1
+          replicas: 3
+        - type: alertState
+          name: CheckoutLatencyHigh
+          state: inactive
+          message: The alert should resolve — wait for the 5-minute windows to refresh (sleep) and check again.
+    xp: 150
+    par: 8
+    solution:
+      - amtool alert
+      - promtool query instant http://localhost:9090 'histogram_quantile(0.99, sum by (le, version) (rate(http_request_duration_seconds_bucket{service="checkout"}[5m])))'
+      - kubectl rollout history deployment/checkout
+      - kubectl logs -l app=checkout --tail=2
+      - kubectl rollout undo deployment/checkout
+      - kubectl rollout status deployment/checkout
+      - sleep 5m
+      - amtool alert
+    explain: |
+      Splitting the quantile `by (le, version)` pinned the latency on the version rolled out 40
+      minutes earlier; the logs named the cause (a query without an index). **Mitigate first, then
+      fix:** rolling back restored service in minutes; adding the index and re-releasing is the
+      follow-up for the postmortem. Always check that the alert actually resolves — "I deployed a fix"
+      is not the same as "users are fine".

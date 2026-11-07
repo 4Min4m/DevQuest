@@ -5,6 +5,8 @@ export type Pred =
   | { unitActive: string }
   | { deploymentImage: { name: string; image: string; namespace?: string } }
   | { fileContains: { path: string; text: string } }
+  | { diskUsageBelow: { mount: string; percent: number } }
+  | { deploymentScaled: { name: string; namespace?: string } }
   | { not: Pred };
 
 export interface Phase {
@@ -59,5 +61,7 @@ export interface ObsState {
   predLog: Record<string, { at: number; v: boolean }[]>;
   /** Rules Prometheus loaded at its last (re)start. */
   loaded?: { pid: number; groups: { name: string; rules: RuleSpec[] }[]; error?: string };
+  /** When each rule (alert name + expr) started being evaluated. */
+  ruleSince?: Record<string, number>;
   silences: { id: string; matchers: Record<string, string>; comment: string; createdBy: string; endsAt: number; expired?: boolean }[];
 }

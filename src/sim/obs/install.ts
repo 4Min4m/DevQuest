@@ -3,6 +3,7 @@ import type { SimState } from '../state';
 import { Systemd } from '../systemd/manager';
 import { Vfs } from '../vfs/vfs';
 import type { LogStreamSpec, SeriesSpec } from './types';
+import { promQuery } from './prometheus';
 
 const SERVICES = {
   prometheus: { exe: '/usr/local/bin/prometheus', port: 9090, args: '--config.file=/etc/prometheus/prometheus.yml', desc: 'Prometheus' },
@@ -44,4 +45,11 @@ export function installStack(state: SimState, spec: StackSpec): void {
     if (u) u.runtime.enabled = true;
     sd.start(`${name}.service`);
   }
+}
+
+/** Pretend Prometheus has been evaluating its current rules for `hours` (alerts already firing). */
+export function backdateRules(state: SimState, hours = 6): void {
+  if (!state.obs) return;
+  promQuery(state, 'vector(1)');
+  for (const k of Object.keys(state.obs.ruleSince ?? {})) state.obs.ruleSince![k] = state.clock - hours * 3600_000;
 }

@@ -1,0 +1,373 @@
+id: incident-response
+title: Incident response
+branch: incident-response
+prerequisites: [security]
+sources:
+  - 09-Observability/06-Incident-Response
+  - 13-SRE-Practices/01-SLI-SLO-SLA
+  - 09-Observability/05-Dashboards-and-Alerting
+theory: |
+  An incident is a race against user pain. The order matters:
+
+  1. **Detect** — an alert on a symptom (errors, latency, saturation) pages the on-call.
+  2. **Triage** — how bad, how many users, which severity? Open an incident channel, name an
+     incident commander.
+  3. **Mitigate** — stop the bleeding first: roll back, scale the canary to zero, fail over, fix a
+     config. Root cause can wait; users can't.
+  4. **Resolve & verify** — the alert clears, the dashboards agree.
+  5. **Learn** — a **blameless postmortem**: timeline, impact, root cause, contributing factors, action
+     items with owners.
+
+  **SLOs and error budgets:** an SLO of 99.9% success over 30 days allows 0.1% failures — the
+  **error budget**. The **burn rate** says how fast you spend it: error ratio ÷ (1 − SLO). Burn rate 1
+  uses the budget in exactly 30 days; 14.4 over an hour means ~2% of the monthly budget gone in that
+  hour — page someone. Alert on burn rate, not on single errors.
+
+  **Alertmanager hygiene:** silence *expected* noise during planned work (`amtool silence add
+  alertname=X --duration=2h --comment="..."`) — scoped, time-limited and explained — never the real
+  pages.
+
+  **Signals to read during an incident:** `amtool alert`, PromQL split by `version`/`instance`,
+  `journalctl -u SERVICE`, `kubectl rollout history`, `logcli query '{app="x"} |= "error"'`, and the
+  change log — most incidents follow a change.
+missions:
+  - id: alert-triage
+    title: Silence the noise, not the page
+    type: guided
+    prompt: |
+      Two alerts are firing. The DBA team is migrating the payments database (ticket **OPS-311**, 2
+      hours), so replication lag is expected; the other alert is a real problem.
+
+      **Silence only the expected alert, for 2 hours, with a comment that names the ticket.** The real
+      page must stay visible.
+    initialState:
+      observability:
+        firingSince: 1
+        rules:
+          /etc/prometheus/rules/alerts.yml: |
+            groups:
+              - name: payments
+                rules:
+                  - alert: PaymentsDBReplicationLag
+                    expr: pg_replication_lag_seconds{service="payments-db"} > 30
+                    for: 5m
+                    labels: { severity: warning }
+                    annotations: { summary: "replica is {{ $value }}s behind" }
+                  - alert: CheckoutHighErrorRate
+                    expr: sum(rate(http_requests_total{service="checkout",status=~"5.."}[5m])) / sum(rate(http_requests_total{service="checkout"}[5m])) > 0.05
+                    for: 5m
+                    labels: { severity: page }
+                    annotations: { summary: "checkout is failing {{ $value | humanizePercentage }} of requests" }
+        series:
+          - { name: pg_replication_lag_seconds, labels: { service: payments-db, instance: "db-2:9187" }, type: gauge, value: 140 }
+          - { name: http_requests_total, labels: { service: checkout, status: "200" }, type: counter, rate: 30 }
+          - { name: http_requests_total, labels: { service: checkout, status: "500" }, type: counter, rate: 4 }
+    hints:
+      - text: "`amtool alert` lists what's firing; the `severity` label says which one pages."
+        cost: 5
+      - text: "`amtool silence add alertname=PaymentsDBReplicationLag --duration=2h --comment=\"OPS-311 planned DB migration\"`, then `amtool silence query`."
+        cost: 10
+    validator:
+      checks:
+        - type: alertState
+          name: PaymentsDBReplicationLag
+          state: silenced
+          comment: OPS-311
+        - type: not
+          check: { type: alertState, name: CheckoutHighErrorRate, state: silenced }
+          message: Never silence the real page.
+    xp: 50
+    par: 3
+    solution:
+      - amtool alert
+      - amtool silence add alertname=PaymentsDBReplicationLag --duration=2h --comment="OPS-311 planned DB migration"
+      - amtool alert
+    explain: |
+      A silence is a matcher with an expiry and an author — it mutes notifications, it doesn't stop
+      Prometheus evaluating the rule. Keep silences narrow (`alertname=...`, maybe `instance=...`),
+      short and explained; a wildcard silence that outlives the maintenance is how real outages go
+      unnoticed.
+
+  - id: slo-burn-rate
+    title: How fast are we burning the error budget?
+    type: guided
+    prompt: |
+      Checkout's SLO: **99.9% of requests succeed** (5xx = failure).
+
+      **Write a PromQL query for checkout's error-budget burn rate over the last hour into
+      `~/queries/burn_1h.promql`** (error ratio ÷ the budget).
+    initialState:
+      observability:
+        series:
+          - { name: http_requests_total, labels: { service: checkout, status: "200" }, type: counter, rate: 50, phases: [{ from: -1800, rate: 49 }] }
+          - { name: http_requests_total, labels: { service: checkout, status: "500" }, type: counter, rate: 0.02, phases: [{ from: -1800, rate: 0.7 }] }
+          - { name: http_requests_total, labels: { service: catalog, status: "200" }, type: counter, rate: 90 }
+      files:
+        /home/student/queries/README: "Budget for a 99.9% SLO = 1 - 0.999 = 0.001\n"
+    hints:
+      - text: "Error ratio over 1h: `sum(rate(http_requests_total{service=\"checkout\",status=~\"5..\"}[1h])) / sum(rate(http_requests_total{service=\"checkout\"}[1h]))`."
+        cost: 10
+      - text: "Divide that by `0.001`. Around 7 means a month's budget would last ~4 days."
+        cost: 5
+    validator:
+      checks:
+        - type: promqlMatches
+          file: /home/student/queries/burn_1h.promql
+          reference: sum(rate(http_requests_total{service="checkout",status=~"5.."}[1h])) / sum(rate(http_requests_total{service="checkout"}[1h])) / 0.001
+    xp: 60
+    par: 3
+    solution:
+      - echo 'sum(rate(http_requests_total{service="checkout",status=~"5.."}[1h])) / sum(rate(http_requests_total{service="checkout"}[1h])) / 0.001' > queries/burn_1h.promql
+      - promtool query instant http://localhost:9090 'sum(rate(http_requests_total{service="checkout",status=~"5.."}[1h])) / sum(rate(http_requests_total{service="checkout"}[1h])) / 0.001'
+    explain: |
+      The Google SRE workbook's multi-window alerts page when the burn rate is above 14.4 over both
+      1 hour and 5 minutes (fast burn), and open a ticket for ~1 over days (slow burn). The short window
+      makes the alert stop quickly once you've fixed things; the long one keeps blips from paging.
+
+  - id: incident-quiz
+    title: Incident check
+    type: quiz
+    prompt: Process and postmortems.
+    xp: 30
+    questions:
+      - kind: single
+        prompt: Checkout errors spiked 10 minutes after a deploy. First move?
+        options:
+          - Find the bug in the diff
+          - Roll back (mitigate), then investigate
+          - Wait to see if it recovers
+          - Restart the database
+        answer: 1
+      - kind: single
+        prompt: What makes a postmortem "blameless"?
+        options:
+          - Nobody writes it
+          - It focuses on how the system and process allowed the failure, not on who to punish
+          - It has no action items
+          - Only managers read it
+        answer: 1
+      - kind: single
+        prompt: SLO 99.9%. The last hour's error ratio is 1.44%. Burn rate?
+        options: ["1.44", "14.4", "0.144", "144"]
+        answer: 1
+      - kind: single
+        prompt: Which belongs in an incident timeline?
+        options:
+          - Times of detection, key decisions, mitigation and recovery
+          - Only the root cause
+          - The names of people who made mistakes
+          - The full chat log
+        answer: 0
+      - kind: single
+        prompt: MTTR measures...
+        options: [Mean time between failures, Mean time to recover/restore service, Monthly traffic rate, Mean time to release]
+        answer: 1
+
+  - id: boss-payments-outage
+    title: "Boss: payments is down"
+    type: boss
+    prompt: |
+      🚨 **PaymentsDown** and **CheckoutHighErrorRate** are paging. Every checkout fails at the
+      payment step. The `payments` service runs on this host; the database team "cleaned up some DNS"
+      last night.
+
+      **Restore payments and confirm both alerts clear.** (Error rates use 5-minute windows.)
+    initialState:
+      dns:
+        - { name: db.internal, type: A, value: 10.0.3.5, ttl: 300 }
+      remotes:
+        - ip: 10.0.3.5
+          name: db.internal
+          up: true
+          latency: 0.6
+          services:
+            5432: { kind: tcp }
+      files:
+        /opt/payments/payments: { content: "ELF", mode: "755" }
+        /etc/payments/payments.env: |
+          # payments service configuration
+          LISTEN_PORT=8443
+          DB_HOST=db-old.internal
+          DB_NAME=payments
+        /etc/systemd/system/payments.service: |
+          [Unit]
+          Description=Payments API
+          After=network-online.target
+
+          [Service]
+          EnvironmentFile=/etc/payments/payments.env
+          ExecStart=/opt/payments/payments
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+      binaries:
+        /opt/payments/payments:
+          name: payments
+          listen: 8443
+          portEnv: LISTEN_PORT
+          requireEnv: [DB_HOST]
+          connect: { hostEnv: DB_HOST, port: 5432 }
+          startLog: ["payments API ready on :{port}"]
+          http: { /health: { body: "ok\n" } }
+      setup:
+        - sudo systemctl enable payments
+        - sudo systemctl start payments || true
+      observability:
+        firingSince: 1
+        rules:
+          /etc/prometheus/rules/alerts.yml: |
+            groups:
+              - name: payments
+                rules:
+                  - alert: PaymentsDown
+                    expr: up{job="payments"} == 0
+                    for: 1m
+                    labels: { severity: page }
+                    annotations: { summary: "payments target {{ $labels.instance }} is down" }
+                  - alert: CheckoutHighErrorRate
+                    expr: sum(rate(http_requests_total{service="checkout",status=~"5.."}[5m])) / sum(rate(http_requests_total{service="checkout"}[5m])) > 0.05
+                    for: 5m
+                    labels: { severity: page }
+                    annotations: { summary: "checkout is failing {{ $value | humanizePercentage }} of requests" }
+        series:
+          - name: up
+            labels: { job: payments, instance: "localhost:8443" }
+            type: gauge
+            value: 0
+            phases: [{ value: 1, when: { unitActive: payments } }]
+          - { name: http_requests_total, labels: { service: checkout, status: "200" }, type: counter, rate: 40, phases: [{ from: -3600, rate: 4 }, { rate: 40, when: { unitActive: payments } }] }
+          - { name: http_requests_total, labels: { service: checkout, status: "502" }, type: counter, rate: 0, phases: [{ from: -3600, rate: 36 }, { rate: 0, when: { unitActive: payments } }] }
+    hints: []
+    validator:
+      checks:
+        - type: serviceActive
+          unit: payments
+        - type: httpResponds
+          url: http://localhost:8443/health
+          contains: ok
+        - type: alertState
+          name: PaymentsDown
+          state: inactive
+        - type: alertState
+          name: CheckoutHighErrorRate
+          state: inactive
+          message: Checkout's error rate should drop back — give the 5-minute windows time (sleep) and check again.
+    xp: 150
+    par: 9
+    solution:
+      - amtool alert
+      - systemctl status payments || true
+      - journalctl -u payments --no-pager -n 5
+      - cat /etc/payments/payments.env
+      - dig +short db.internal
+      - sudo sed -i 's/DB_HOST=db-old.internal/DB_HOST=db.internal/' /etc/payments/payments.env
+      - sudo systemctl restart payments
+      - sleep 5m
+      - amtool alert
+    explain: |
+      The service was crash-looping: `journalctl` showed `lookup db-old.internal ... no such host`
+      right after the DNS clean-up removed the old name. Restoring the config fixed payments at once
+      (`up` went back to 1) and checkout's error ratio drained out of its 5-minute window shortly
+      after. Postmortem actions: change DNS through review, alert on the payments service itself
+      earlier than the checkout symptom, and make the DB host part of a tested config.
+
+  - id: boss-burning-canary
+    title: "Boss: the canary is burning the budget"
+    type: boss
+    prompt: |
+      🔥 **CheckoutBurnRateFast** fired: checkout is burning its monthly error budget at more than 14×
+      the sustainable rate. A canary of a new version started taking traffic an hour ago.
+
+      **Find what's failing, stop the bleeding without touching the stable `checkout` deployment, and
+      confirm the alert clears.**
+    initialState:
+      kubeImages:
+        ghcr.io/acme/checkout:2.4.0:
+          listen: [8080]
+          logs: ["checkout 2.4.0 listening on :8080"]
+          http: { "/": { body: "checkout 2.4.0\n" } }
+        ghcr.io/acme/checkout:2.5.0-rc1:
+          listen: [8080]
+          logs: ["checkout 2.5.0-rc1 listening on :8080", "ERROR POST /api/checkout 500: TypeError: Cannot read properties of undefined (reading 'currency')"]
+          http: { "/": { body: "checkout 2.5.0-rc1\n" } }
+      kubeManifests: |
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: checkout
+          labels: { app: checkout, track: stable }
+        spec:
+          replicas: 4
+          selector:
+            matchLabels: { app: checkout, track: stable }
+          template:
+            metadata:
+              labels: { app: checkout, track: stable }
+            spec:
+              containers:
+              - name: checkout
+                image: ghcr.io/acme/checkout:2.4.0
+        ---
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: checkout-canary
+          labels: { app: checkout, track: canary }
+        spec:
+          replicas: 1
+          selector:
+            matchLabels: { app: checkout, track: canary }
+          template:
+            metadata:
+              labels: { app: checkout, track: canary }
+            spec:
+              containers:
+              - name: checkout
+                image: ghcr.io/acme/checkout:2.5.0-rc1
+      observability:
+        firingSince: 1
+        rules:
+          /etc/prometheus/rules/slo.yml: |
+            groups:
+              - name: slo
+                rules:
+                  - alert: CheckoutBurnRateFast
+                    expr: (sum(rate(http_requests_total{service="checkout",status=~"5.."}[5m])) / sum(rate(http_requests_total{service="checkout"}[5m]))) / 0.001 > 14.4
+                    for: 2m
+                    labels: { severity: page }
+                    annotations: { summary: "checkout burn rate is {{ $value }}x" }
+        series:
+          - { name: http_requests_total, labels: { service: checkout, version: 2.4.0, status: "200" }, type: counter, rate: 80 }
+          - { name: http_requests_total, labels: { service: checkout, version: 2.4.0, status: "500" }, type: counter, rate: 0.02 }
+          - { name: http_requests_total, labels: { service: checkout, version: 2.5.0-rc1, status: "200" }, type: counter, rate: 0, phases: [{ from: -3600, rate: 16, when: { deploymentScaled: { name: checkout-canary } } }] }
+          - { name: http_requests_total, labels: { service: checkout, version: 2.5.0-rc1, status: "500" }, type: counter, rate: 0, phases: [{ from: -3600, rate: 4, when: { deploymentScaled: { name: checkout-canary } } }] }
+    hints: []
+    validator:
+      checks:
+        - type: kubeResource
+          kind: Deployment
+          name: checkout-canary
+          path: spec.replicas
+          equals: "0"
+        - type: kubeRollout
+          name: checkout
+          image: ghcr.io/acme/checkout:2.4.0
+          replicas: 4
+        - type: alertState
+          name: CheckoutBurnRateFast
+          state: inactive
+    xp: 150
+    par: 7
+    solution:
+      - amtool alert
+      - promtool query instant http://localhost:9090 'sum by (version) (rate(http_requests_total{service="checkout",status=~"5.."}[5m])) / sum by (version) (rate(http_requests_total{service="checkout"}[5m]))'
+      - kubectl logs -l track=canary --tail=2
+      - kubectl scale deployment checkout-canary --replicas=0
+      - sleep 5m
+      - amtool alert
+    explain: |
+      Splitting the error ratio `by (version)` showed the canary failing ~20% of its requests while
+      stable was fine. Scaling the canary to zero is the cheapest possible rollback — that's the point
+      of canaries. Next time, let the rollout tool (Argo Rollouts, Flagger) watch this same query and
+      abort automatically.
